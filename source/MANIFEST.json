@@ -1,0 +1,368 @@
+{
+ "vendoredFrom": "/Users/theodor/Documents/Field Atlas/Field Atlas",
+ "vendoredAt": "2026-07-28T14:22:08+0200",
+ "fileCount": 60,
+ "totalBytes": 11158980,
+ "files": [
+  {
+   "from": "Field Atlas (standalone-src).dc.html",
+   "to": "field-atlas-1x-src.dc.html",
+   "bytes": 392190,
+   "sha256": "dcea34c6718defe92f77fcb9bfcfa1b373c5add3f8f2e763db0ad28a6225582b"
+  },
+  {
+   "from": "trace/b-zones.json",
+   "to": "geometry/b-zones.json",
+   "bytes": 1781,
+   "sha256": "58a57748c46d19946efed9bb22ff4f5745ed74b37b989e7fca2b09c4201d1733"
+  },
+  {
+   "from": "trace/baked-geo.json",
+   "to": "geometry/baked-geo.json",
+   "bytes": 18701,
+   "sha256": "91798a193aa7367e7be276da289cf68d19a0b89c217c38bebd93dffcea9ce717"
+  },
+  {
+   "from": "trace/comp-geo.json",
+   "to": "geometry/comp-geo.json",
+   "bytes": 24927,
+   "sha256": "5a3c662b695f123205e33bea1847b3a8c5c4b62990d4c6651f9454f168de379d"
+  },
+  {
+   "from": "trace/enk-kart-lines.json",
+   "to": "geometry/enk-kart-lines.json",
+   "bytes": 2918,
+   "sha256": "d9186ed23f1adfb86dad7a0bc1671841454c5bad377f2019f8a70717cf1ad772"
+  },
+  {
+   "from": "trace/fit-new.json",
+   "to": "geometry/fit-new.json",
+   "bytes": 61514,
+   "sha256": "76baaf02e1c8b5173029e4693ef4a86ba0fc8ac0f4e675940ab2bc01901ab94e"
+  },
+  {
+   "from": "trace/fits.json",
+   "to": "geometry/fits.json",
+   "bytes": 3508,
+   "sha256": "1e3dd79f9649db36cb3d715a78df6c5aef313f8b193fd07ee6d8e0f3c9ab8a4a"
+  },
+  {
+   "from": "trace/gell-main-v1.json",
+   "to": "geometry/gell-main-v1.json",
+   "bytes": 640,
+   "sha256": "d034123f3c722a1ffc72fb46643fabf009f6cf1dc7246f6c23af69e796de490d"
+  },
+  {
+   "from": "trace/gell-main-v2.json",
+   "to": "geometry/gell-main-v2.json",
+   "bytes": 643,
+   "sha256": "23682b09fbdb47436021c8249c9323914ee8a9ca99eb2f31e0fbad916ac96545"
+  },
+  {
+   "from": "trace/layouts-baked.json",
+   "to": "geometry/layouts-baked.json",
+   "bytes": 10892,
+   "sha256": "041ed5e7f2e0ca444fdb977a627310a474fbf708da307cc459ec58af6ddfdba9"
+  },
+  {
+   "from": "trace/malmen-final.json",
+   "to": "geometry/malmen-final.json",
+   "bytes": 546,
+   "sha256": "d1514f465989d17d5c8d5bea7aedbe06eab0d0cc5a567f8ad143baf30d9bc672"
+  },
+  {
+   "from": "trace/new-osm.json",
+   "to": "geometry/new-osm.json",
+   "bytes": 9292,
+   "sha256": "fab447f42bfcc28a487409eb8ef70c3f94c8febcab5f29c9ca0347e183f96d04"
+  },
+  {
+   "from": "trace/osm-geo.json",
+   "to": "geometry/osm-geo.json",
+   "bytes": 5285,
+   "sha256": "8fd3f89db64b4122bcf7ed0a979be6119724e864afa98c57931515dd41d73c69"
+  },
+  {
+   "from": "trace/rorken-final.json",
+   "to": "geometry/rorken-final.json",
+   "bytes": 396,
+   "sha256": "d38f2b2f7003bf9f9fd60c66aad5041e0c2d34fc1cb49d8a6a1a0958b21ae0d8"
+  },
+  {
+   "from": "uploads/260611-FD26_FRIDAY_Spotters_ways_to_arrive-peter.pptx",
+   "to": "uploads/260611-FD26_FRIDAY_Spotters_ways_to_arrive-peter.pptx",
+   "bytes": 3238015,
+   "sha256": "e398077a583b5750b0a30644ea6d069cef6e38f9390e6c3f4bb8ad28c855d9ac"
+  },
+  {
+   "from": "uploads/Ena Karting Ring-4c50dbb6.svg",
+   "to": "uploads/Ena Karting Ring-4c50dbb6.svg",
+   "bytes": 1714,
+   "sha256": "4c50dbb6458c59fe0e38f3c8ab6239908f8f3f8e0abee51bf6c6f45c65d1d25d"
+  },
+  {
+   "from": "uploads/Ena Karting Ring.svg",
+   "to": "uploads/Ena Karting Ring.svg",
+   "bytes": 1714,
+   "sha256": "4c50dbb6458c59fe0e38f3c8ab6239908f8f3f8e0abee51bf6c6f45c65d1d25d"
+  },
+  {
+   "from": "uploads/Gelleråsen.svg",
+   "to": "uploads/Gelleråsen.svg",
+   "bytes": 1837,
+   "sha256": "212c7e8daf3ab9f9cb9918c049dc666e8f28a445d9689021cbb442ca5e5850e2"
+  },
+  {
+   "from": "uploads/Hälla Ring-effa76c8.svg",
+   "to": "uploads/Hälla Ring-effa76c8.svg",
+   "bytes": 2223,
+   "sha256": "effa76c8c17378a3fe22c262c7beb8562f67885035c16309dafa53d93ce3d46d"
+  },
+  {
+   "from": "uploads/Hälla Ring.svg",
+   "to": "uploads/Hälla Ring.svg",
+   "bytes": 2223,
+   "sha256": "effa76c8c17378a3fe22c262c7beb8562f67885035c16309dafa53d93ce3d46d"
+  },
+  {
+   "from": "uploads/Linköping MS.svg",
+   "to": "uploads/Linköping MS.svg",
+   "bytes": 2296,
+   "sha256": "308c3990f627a9c2be4b0f8659395f0f76e31cb6f640c6d0a3ffb1cbb47ad977"
+  },
+  {
+   "from": "uploads/Screenshot 2026-07-02 at 01.11.51.png",
+   "to": "uploads/Screenshot 2026-07-02 at 01.11.51.png",
+   "bytes": 515566,
+   "sha256": "daef9dc8edebbf3c83cfc050141a2b4677d4be35b9412a2d80f83c9295d2e517"
+  },
+  {
+   "from": "uploads/Screenshot 2026-07-02 at 01.11.59.png",
+   "to": "uploads/Screenshot 2026-07-02 at 01.11.59.png",
+   "bytes": 475758,
+   "sha256": "38d80996a7d96da1c90f0d37f67a4ea827097e00135a38b52a4f0c7f405905a6"
+  },
+  {
+   "from": "uploads/Screenshot 2026-07-02 at 01.12.06.png",
+   "to": "uploads/Screenshot 2026-07-02 at 01.12.06.png",
+   "bytes": 478623,
+   "sha256": "d25a367615afdbd2adb06811ec3fcbddc98c3a3ca6a29b7c8bd92d9a66a5f29b"
+  },
+  {
+   "from": "uploads/Screenshot 2026-07-02 at 16.51.56.png",
+   "to": "uploads/Screenshot 2026-07-02 at 16.51.56.png",
+   "bytes": 1249009,
+   "sha256": "95895141b6702992788cf2832cb2823c4f4dac6c37c39c45beda96b63d797999"
+  },
+  {
+   "from": "uploads/gelleraasen.svg",
+   "to": "uploads/gelleraasen.svg",
+   "bytes": 1837,
+   "sha256": "212c7e8daf3ab9f9cb9918c049dc666e8f28a445d9689021cbb442ca5e5850e2"
+  },
+  {
+   "from": "uploads/halla_ring.svg",
+   "to": "uploads/halla_ring.svg",
+   "bytes": 2223,
+   "sha256": "effa76c8c17378a3fe22c262c7beb8562f67885035c16309dafa53d93ce3d46d"
+  },
+  {
+   "from": "uploads/jarfalla1.svg",
+   "to": "uploads/jarfalla1.svg",
+   "bytes": 2018,
+   "sha256": "def3ce32a41fe979b13e2faed118d4c8a0d34394a5567b01de8530ac2892cd6f"
+  },
+  {
+   "from": "uploads/jarfalla2.svg",
+   "to": "uploads/jarfalla2.svg",
+   "bytes": 2018,
+   "sha256": "def3ce32a41fe979b13e2faed118d4c8a0d34394a5567b01de8530ac2892cd6f"
+  },
+  {
+   "from": "uploads/järfälla-def3ce32.svg",
+   "to": "uploads/järfälla-def3ce32.svg",
+   "bytes": 2018,
+   "sha256": "def3ce32a41fe979b13e2faed118d4c8a0d34394a5567b01de8530ac2892cd6f"
+  },
+  {
+   "from": "uploads/järfälla.svg",
+   "to": "uploads/järfälla.svg",
+   "bytes": 2018,
+   "sha256": "def3ce32a41fe979b13e2faed118d4c8a0d34394a5567b01de8530ac2892cd6f"
+  },
+  {
+   "from": "uploads/pasted-1782946221101-0.png",
+   "to": "uploads/pasted-1782946221101-0.png",
+   "bytes": 1508478,
+   "sha256": "a010d62726f97cb72ef397ead5a42c3bc952418fdaf508e8dfa5ce111a2870f8"
+  },
+  {
+   "from": "uploads/pasted-1782946225758-0.png",
+   "to": "uploads/pasted-1782946225758-0.png",
+   "bytes": 277094,
+   "sha256": "92041be89751646a423a6ffa4f6e6a286f98e03c16b2e0c390866357d3a62225"
+  },
+  {
+   "from": "uploads/pasted-1782946230175-0.png",
+   "to": "uploads/pasted-1782946230175-0.png",
+   "bytes": 572961,
+   "sha256": "36fd81566a7d139dfac04ae98c0791b31665ecdeaa14552970c0cafc32f57f08"
+  },
+  {
+   "from": "uploads/pasted-1782946234451-0.png",
+   "to": "uploads/pasted-1782946234451-0.png",
+   "bytes": 1772159,
+   "sha256": "bd8721fbfbd7f6f2ce0113c571b5d0c4535bf430b61bb47e04c2d1ba25807981"
+  },
+  {
+   "from": "uploads/pasted-1782946258222-0.png",
+   "to": "uploads/pasted-1782946258222-0.png",
+   "bytes": 94115,
+   "sha256": "f322fe14f116ef0adab38c245db9c5fda5264401a169cee7c10ac2c16acc0014"
+  },
+  {
+   "from": "uploads/pasted-1783003901295-0.png",
+   "to": "uploads/pasted-1783003901295-0.png",
+   "bytes": 18039,
+   "sha256": "3370deb92e80dcb37ba90289a1b33f293dd20aa1c2e1171be0eab8c88870774b"
+  },
+  {
+   "from": "uploads/pasted-1783003963208-0.png",
+   "to": "uploads/pasted-1783003963208-0.png",
+   "bytes": 127255,
+   "sha256": "de7433ef50a4a727a761656369bf087967a874b6d3f089b5c95e52c006ce777f"
+  },
+  {
+   "from": "uploads/rörken ring.svg",
+   "to": "uploads/rörken ring.svg",
+   "bytes": 2581,
+   "sha256": "44a2fabccdd958a53fe8554424843f3e1b548ee099b596ca85b824c597e9b95a"
+  },
+  {
+   "from": "uploads/scorit-asum.svg",
+   "to": "uploads/scorit-asum.svg",
+   "bytes": 4489,
+   "sha256": "6ee3a5bb80050acc891d3d1d9465cc5f49a554dc5c899bab4fe24c3c77698962"
+  },
+  {
+   "from": "uploads/scorit-boras.svg",
+   "to": "uploads/scorit-boras.svg",
+   "bytes": 2905,
+   "sha256": "798d4d465f240b49edb17c700d52e3f8cb0fe394788a75df1481cac475149069"
+  },
+  {
+   "from": "uploads/scorit-fastec.svg",
+   "to": "uploads/scorit-fastec.svg",
+   "bytes": 1521,
+   "sha256": "4dc900dccccc368fa1bf3c1cefd29fe3580c506385fc9078f21f2f71d795ff8b"
+  },
+  {
+   "from": "uploads/scorit-kallax.svg",
+   "to": "uploads/scorit-kallax.svg",
+   "bytes": 1025,
+   "sha256": "6bc65f4153939f1777dad02caf54dde71e32514d6029c9835e783e7b1a8fdf21"
+  },
+  {
+   "from": "uploads/scorit-kalmar.svg",
+   "to": "uploads/scorit-kalmar.svg",
+   "bytes": 1792,
+   "sha256": "01b7cf6b21eca8ab6942f9e5124c806052993c7d41716d2e393dabb39f289ecf"
+  },
+  {
+   "from": "uploads/scorit-klippan.svg",
+   "to": "uploads/scorit-klippan.svg",
+   "bytes": 2377,
+   "sha256": "9a01048601b739ec8984057a0285ac573e50ea45d0d99986edba11a58776c241"
+  },
+  {
+   "from": "uploads/scorit-lidkoping.svg",
+   "to": "uploads/scorit-lidkoping.svg",
+   "bytes": 1832,
+   "sha256": "7d6301ddd8139b270accb3e087f0843d9c5912d76dde219de2b07cff4e60b1e3"
+  },
+  {
+   "from": "uploads/scorit-pitea.svg",
+   "to": "uploads/scorit-pitea.svg",
+   "bytes": 2703,
+   "sha256": "7bf867ca2bd428a435e726ac547f037094c19607f71a0adbc090696f1a3a4d75"
+  },
+  {
+   "from": "uploads/scorit-siljan.svg",
+   "to": "uploads/scorit-siljan.svg",
+   "bytes": 2984,
+   "sha256": "a8cb992643dda08561384195978c40daca420a015a676d7eddac298481715aa5"
+  },
+  {
+   "from": "uploads/scorit-varggropen.svg",
+   "to": "uploads/scorit-varggropen.svg",
+   "bytes": 1068,
+   "sha256": "0ecbfc2539aa15c2e1a1425a27136828a2252d1cee38a1e6d294580d56e93d3e"
+  },
+  {
+   "from": "fonts/saira-semicondensed-500-latin-ext.woff2",
+   "to": "fonts/saira-semicondensed-500-latin-ext.woff2",
+   "bytes": 15004,
+   "sha256": "1b048b6d7086975d1a4ebc346763b7e3d5d0e7ac3682a8dadec1b8fef8dceab6"
+  },
+  {
+   "from": "fonts/saira-semicondensed-500-latin.woff2",
+   "to": "fonts/saira-semicondensed-500-latin.woff2",
+   "bytes": 18260,
+   "sha256": "d5adc47713eef25ae9a51d888d6477e18f95c0cd49bba03f5e14a7d2ebcb0f6b"
+  },
+  {
+   "from": "fonts/saira-semicondensed-600-latin-ext.woff2",
+   "to": "fonts/saira-semicondensed-600-latin-ext.woff2",
+   "bytes": 14936,
+   "sha256": "3a7cafcb70fc8d222b685f59ce46aabe8d673828059972ca2c5e295eb31a7f0f"
+  },
+  {
+   "from": "fonts/saira-semicondensed-600-latin.woff2",
+   "to": "fonts/saira-semicondensed-600-latin.woff2",
+   "bytes": 18220,
+   "sha256": "2c55a397b6bf357e52d3ddb64d3815e6c4d47e3052d021e772b71d8bee3f3d6f"
+  },
+  {
+   "from": "fonts/saira-semicondensed-700-latin-ext.woff2",
+   "to": "fonts/saira-semicondensed-700-latin-ext.woff2",
+   "bytes": 15008,
+   "sha256": "2f2715e1116012d30be0c58e81ce104b3807d0628ebe6ed6e9e305f54ff75b42"
+  },
+  {
+   "from": "fonts/saira-semicondensed-700-latin.woff2",
+   "to": "fonts/saira-semicondensed-700-latin.woff2",
+   "bytes": 18084,
+   "sha256": "0a9365135efb8da7a2c5c831788227a484ada6448b5bf0d02918c119c8958d94"
+  },
+  {
+   "from": "icons/apple-touch-icon.png",
+   "to": "icons/apple-touch-icon.png",
+   "bytes": 13014,
+   "sha256": "14e57df38b17a7c58fd955dc47f8ed9c71aa67d158b2bc8956cafba5d6107e64"
+  },
+  {
+   "from": "icons/favicon.png",
+   "to": "icons/favicon.png",
+   "bytes": 700,
+   "sha256": "3690ddfa64156df6c90e993d335c9082426fdec668a41200ebdd1274aa1afbd8"
+  },
+  {
+   "from": "icons/icon-192.png",
+   "to": "icons/icon-192.png",
+   "bytes": 14067,
+   "sha256": "5c25aeffb221e4136adb7878296922d7546e86613b63712af7b15bc87a059972"
+  },
+  {
+   "from": "icons/icon-512.png",
+   "to": "icons/icon-512.png",
+   "bytes": 63167,
+   "sha256": "e07ec6d168b38462d22cfa03920595397e119af6e42ad87495628c3b8334b688"
+  },
+  {
+   "from": "icons/maskable-512.png",
+   "to": "icons/maskable-512.png",
+   "bytes": 58799,
+   "sha256": "f5579936fc4402cfb6a66d7891841fb17b1497cdca85400ddd0f2a0a64c34945"
+  }
+ ]
+}
