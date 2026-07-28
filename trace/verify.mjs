@@ -117,9 +117,18 @@ ok(cd.perEntry.length === EVENT_COUNT, 'every entry carries a countdown', String
 ok(cd.perRoster.length === EVENT_COUNT, '§01 lists every date, with a countdown each', String(cd.perRoster.length));
 ok([...cd.perEntry, ...cd.perRoster].every(t => /^(T−|COMPLETE|IN PROGRESS)/.test(t)),
    'countdown states are legal', cd.perEntry.concat(cd.perRoster).join(','));
+/* Poll for a change rather than sampling once after a fixed wait. The readout
+   is driven by setInterval(tick, 1000), and a 1.4s deadline is not something a
+   loaded machine owes you — under a saturated main thread (three canvases on a
+   software rasteriser) the callback coalesces and slips, which failed this
+   check intermittently on a countdown that was ticking perfectly well. What
+   matters is that it advances, not that it advances by a stopwatch. */
 const before = cd.hero;
-await sleep(1400);
-const after = await p.$eval('#readout-next', n => n.textContent.trim());
+let after = before;
+for (let i = 0; i < 30 && after === before; i++) {
+  await sleep(200);
+  after = await p.$eval('#readout-next', n => n.textContent.trim());
+}
 ok(before !== after || /COMPLETE|CLOSED/.test(after), 'countdown is ticking', `${before} -> ${after}`);
 
 /* --------------------------------------------------------- 4. the two pills */
@@ -730,6 +739,43 @@ const landPts = await p.evaluate(async () => {
 ok(landPts.points > 15000,
   'the land outline is the simplified 50m set, not something coarser',
   JSON.stringify(landPts));
+
+/* -- 10g · ★ THE ATMOSPHERE IS ROUND -------------------------------------
+   Theodor: "the light shape around the globe is a bit squarish — there is a
+   small square gradient with atmospheric blue." The halo is painted out to
+   HALO x the surface radius, and the disc used to fill the canvas, so the glow
+   ran off all four edges and what showed was the corners of its bounding box.
+   If any edge pixel is painted, the halo is being clipped by the canvas again. */
+const edges = await p.evaluate(() => {
+  const c = document.getElementById('globe');
+  const g = c.getContext('2d');
+  const W = c.width, H = c.height;
+  const a = (x, y) => g.getImageData(Math.round(x), Math.round(y), 1, 1).data[3];
+  return {
+    corners: [a(1, 1), a(W - 2, 1), a(1, H - 2), a(W - 2, H - 2)],
+    midEdges: [a(W / 2, 1), a(W / 2, H - 2), a(1, H / 2), a(W - 2, H / 2)],
+  };
+});
+ok([...edges.corners, ...edges.midEdges].every(v => v === 0),
+  '★ the halo fits inside its canvas — no square edge on the atmosphere',
+  JSON.stringify(edges));
+
+/* -- 10h · ★ CIRCUITS COME FROM THE DRAWN ARTWORK ------------------------
+   Theodor: "make all the tracks accurate, because it is on the first version …
+   in the Field Atlas folder you should be able to find the SVG files." Every
+   circuit venue now carries the hand-drawn layout out of source/uploads, and
+   the thumbnail draws that rather than a 33-point sampled trace. A layout that
+   has fallen back to the trace is a regression in accuracy even though it still
+   renders, so this checks the SOURCE, not just that a path exists. */
+const art = await p.evaluate(async () => {
+  const m = await import('/data/atlas.js');
+  const circuit = m.VENUES.filter(v => !v.track?.runway);
+  return { circuits: circuit.length, withArt: circuit.filter(v => v.svg?.d).length,
+           missing: circuit.filter(v => !v.svg?.d).map(v => v.id) };
+});
+ok(art.withArt === art.circuits,
+  '★ every circuit venue draws from its hand-drawn layout, not a sampled trace',
+  JSON.stringify(art));
 await p.close();
 
 /* =========================================================================

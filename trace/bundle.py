@@ -47,7 +47,7 @@ is imported by both main.js and circuit.js and they share it, exactly as they do
 over http. Base64 also cannot contain `<`, so no payload can ever close the
 <script> tag it lives in.
 """
-import base64, os, re, sys
+import base64, hashlib, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -130,9 +130,13 @@ def build(with_thumbnail):
     html = read("index.html")
     cache = {}
 
+    # `?v=<hash>` is index.html's cache-busting (see stamp_index) and is not part
+    # of any path on disk — strip it before opening anything
+    bare = lambda href: href.split("?")[0]
+
     # <link rel="stylesheet" href="assets/*.css">  ->  inline <style>
     def inline_css(m):
-        href = m.group(1)
+        href = bare(m.group(1))
         if href.startswith("http"):
             return m.group(0)                     # Google Fonts stays a link
         return "<style>\n/* %s */\n%s</style>" % (href, read(href))
@@ -141,7 +145,7 @@ def build(with_thumbnail):
 
     # <script type="module" src="js/main.js">  ->  inline module importing it
     def inline_js(m):
-        entry = m.group(1)
+        entry = bare(m.group(1))
         return ('<script type="module">\n/* %s and every module it imports, each '
                 'inlined as its own\n   data: URL — see trace/bundle.py */\n'
                 'import "%s";\n</script>' % (entry, data_url(entry, cache)))
@@ -154,8 +158,39 @@ def build(with_thumbnail):
     return html, cache
 
 
+def stamp_index():
+    """Put a content hash on index.html's own asset URLs.
+
+    ★ The .dc.html files inline everything, so they can never be served half
+    stale. index.html can, and once was: Theodor got a page whose JS had
+    reloaded and whose assets/app.css had not, so the panel opened, locked the
+    scroll, and rendered nothing — "everything just froze". `http.server` sends
+    no Cache-Control, and a response with no stated freshness is one the browser
+    may age by its own heuristic.
+
+    trace/serve.py answers that locally with `no-store`. This answers it for
+    anywhere index.html is actually hosted: `?v=<hash of the file>` changes the
+    URL whenever the bytes change, so a cached copy can only ever be served for
+    bytes that are still current. Nothing to remember to bump.
+    """
+    html = read("index.html")
+    def restamp(m):
+        attr, href = m.group(1), m.group(2).split("?")[0]
+        if href.startswith("http") or not os.path.exists(os.path.join(ROOT, href)):
+            return m.group(0)
+        h = hashlib.sha1(read(href).encode("utf-8")).hexdigest()[:8]
+        return '%s="%s?v=%s"' % (attr, href, h)
+    out = re.sub(r'(href|src)="([^"]+\.(?:css|js))(?:\?[^"]*)?"', restamp, html)
+    if out != html:
+        with open(INDEX, "w", encoding="utf-8") as f:
+            f.write(out)
+    return out != html
+
+
 def main():
     check = "--check" in sys.argv
+    if not check and stamp_index():
+        print("  stamped index.html asset URLs with content hashes")
     standalone, cache = build(True)
     plain, _ = build(False)
 

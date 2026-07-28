@@ -228,8 +228,11 @@ section { position: relative; }
 .roster { padding: clamp(30px, 5vh, 56px) 0 clamp(52px, 10vh, 120px); }
 .ro-row {
   display: grid; align-items: baseline;
-  grid-template-columns: 62px 8px minmax(0, 1fr) 120px 84px 128px 96px;
-  gap: 16px; padding: 15px 4px 13px;
+  /* the last column holds "T− 15d 07:45:45" — 15 mono characters at .17em of
+     tracking, which needs ~150px. At 96px it wrapped onto a second line and
+     pushed every future date's row taller than the completed ones. */
+  grid-template-columns: 58px 8px minmax(0, 1fr) 116px 80px 108px 152px;
+  gap: 14px; padding: 15px 4px 13px;
   border-bottom: 1px solid var(--hairline-soft);
   color: var(--ink-2); text-decoration: none;
   transition: background .25s var(--ease), color .25s var(--ease);
@@ -255,7 +258,7 @@ section { position: relative; }
 }
 .ro-disc { color: var(--ink-3); }
 .ro-len, .ro-date { color: var(--ink-2); text-align: right; }
-.ro-cd { color: var(--ink-2); text-align: right; }
+.ro-cd { color: var(--ink-2); text-align: right; white-space: nowrap; }
 
 @media (max-width: 1080px) {
   .ro-row { grid-template-columns: 52px 8px minmax(0, 1fr) 104px 108px; }

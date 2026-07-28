@@ -16,8 +16,16 @@ No build step, no backend, no dependencies. It must be served over http — it u
 modules, and `file://` blocks them.
 
 ```bash
-python3 -m http.server 8766 --directory "/Users/theodor/Documents/Field Atlas 2.0"
+python3 trace/serve.py
 ```
+
+Use that rather than `python3 -m http.server`. It is the same static server with
+`Cache-Control: no-store` on every response — because `http.server` sends no
+freshness header at all, and a browser is then free to age assets by its own
+heuristic. That produced the worst possible half-state once: the JS reloaded and
+`assets/app.css` did not, so the panel opened, locked the page scroll, and
+rendered nothing visible. A frozen page, from a fix that was already correct on
+disk. `no-store` makes that impossible.
 
 Then open <http://localhost:8766/>. `.claude/launch.json` carries the same config.
 
@@ -33,7 +41,7 @@ js/main.js               data -> DOM, the editorial copy, wiring
 js/globe.js              orthographic Earth on a 2D canvas, with the pins
 js/starfield.js          the field behind everything
 js/circuit.js            §03 — particles round a traced racing line
-js/loop.js               one closed racing line, shared by all four places one is drawn
+js/loop.js               one racing line: 1.x's corner-radius path, splines, flattening
 js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy signal
 js/panel.js              the detail overlay: routing, focus, history
 js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks
@@ -46,6 +54,7 @@ Field Atlas 2.0.dc.html                    GENERATED — the same, minus the thu
 source/                  VENDORED copy of Field Atlas 1.x — see source/README.md
 trace/sync-source.py     refresh source/ from 1.x
 trace/extract.py         source/ -> data/
+trace/serve.py           the dev server, with caching off — use this one
 trace/bundle.py          js/ + assets/ + data/ + index.html -> the two .dc.html files
 trace/verify.mjs         headless smoke test
 trace/shots.mjs          one PNG per chapter, plus mobile and day side
@@ -58,8 +67,8 @@ PROMPT.md                the brief for the next session (bugs, features, shippin
 Same trio Field Atlas 1.x ships, and **the master is the opposite one**. In 1.x
 you edit `Field Atlas (standalone-src).dc.html` and `index.html` is generated
 from it. Here the modular sources are the master — that is conventions 1 and 3
-below, and the reason working on this needs nothing but `python3 -m
-http.server` — so the arrow points the other way:
+below, and the reason working on this needs nothing but a static server — so
+the arrow points the other way:
 
 ```
 js/ + assets/ + data/ + index.html          <- edit these
@@ -90,8 +99,8 @@ drift into being two different pages.
 | # | Section | What it is |
 |---|---------|-----------|
 | 00 | Overture | Title, lede, live countdown to the next date, the globe |
-| 01 | Mandate | Why the atlas exists, and how the numbers were made |
-| 02 | The Season | One entry per date: description, plan, spec sheet, bars |
+| 01 | The Dates | Every booking in the season, one row each, in order |
+| 02 | The Season | One entry per date: summary, drawn layout, spec sheet, bars |
 | 03 | Anatomy of a Circuit | A traced racing line with particles and named corners |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
 
@@ -138,6 +147,24 @@ What the script computes, rather than copies:
 Linköpings Motorstadion has a hand trace but no geo fit in 1.x, so its length is
 scaled by the median px-per-metre of the venues that have both. It is marked `est.`
 on the page and in the data.
+
+### Which geometry a circuit is drawn from
+
+Three representations exist and they are **not** equal. `circuitFor()` in
+`js/main.js` picks in this order, and the caption under each layout names which
+one it got:
+
+1. **`svg` — the drawn layout.** Real cubic Béziers on a 500x300 artboard, out of
+   `source/uploads`. This is what the circuit was actually drawn as, and every
+   circuit venue plus ten competition tracks have one. Preferred always.
+2. **`layout` — a hand trace as `[x, y, r]`,** where `r` is the designed corner
+   radius at that vertex. Drawn with `layoutPath()`, ported unchanged from 1.x:
+   straight runs plus one quadratic per corner. ★ `tracedLayout()` used to drop
+   the third component, which threw every radius away and left a 33-sided
+   polygon — that was "the circuits are not accurate".
+3. **`track.path` — a sampled OSM centreline,** 29–72 points, no radii. Only here
+   is a spline correct, and `loopPath()` uses centripetal Catmull-Rom because
+   uniform overshoots on a straight-then-hairpin spacing mix.
 
 Malmen is an air base, not a circuit: it reports runway lengths and no corners.
 

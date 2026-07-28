@@ -4,7 +4,7 @@
     {
       "name": "field-atlas-2",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8766", "--directory", "/Users/theodor/Documents/Field Atlas 2.0"],
+      "runtimeArgs": ["/Users/theodor/Documents/Field Atlas 2.0/trace/serve.py", "8766"],
       "port": 8766
     }
   ]

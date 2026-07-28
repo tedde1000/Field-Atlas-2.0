@@ -57,71 +57,28 @@ function scrollToEl(target, extra = 8) {
 }
 
 /* ================================================================= EDITORIAL
- * One block per event, keyed venueId:index. `desc` is the body paragraph,
- * `plan` is the pull-quote. Facts quoted inside them are read off the data at
- * build time (see fill()), so they cannot drift from the numbers beside them.
+ * ★ ONE SENTENCE PER DATE, AND IT HAS TO EARN ITS PLACE.
+ *
+ * Theodor: "make it maybe a bit cleaner, less text — I don't really need
+ * 'short lens, low angle, and work the exit kerbs', those kinds of text …
+ * just have a short summary under the name, and of course around them place
+ * and country."
+ *
+ * So the shooting notes are gone and the per-event pull-quote with them. What
+ * is left says what the date IS, not how to photograph it — the numbers beside
+ * it already say the rest, and every one of them is read off the data at build
+ * time through fill(), so a summary can never drift from the spec table
+ * printed next to it.
  * ========================================================================= */
 const COPY = {
-  'rasbo:0': {
-    desc: `The home circuit, {km} kilometres up the road, and the only date on this list I can
-      reach before the light is up. {corners} corners in {lap} metres means the karts are never
-      straight for long — the longest run is {straight} metres, roughly two seconds of pan at 1/60.
-      Season opener, and the one weekend where arriving early costs nothing.`,
-    plan: `Paddock before seven, main bend for practice, and stay on the inside of the last corner
-      for the final — the light comes over the trees behind it.`,
-  },
-  'halla:0': {
-    desc: `{corners} corners, {lap} metres, and a longest straight of {straight} metres: the
-      tightest thing in the atlas. Everything happens close, which means shorter glass and more
-      walking than shooting. First round of the MKR season, when the grids are still finding
-      themselves and the racing is scrappy in a way that photographs well.`,
-    plan: `Short lens, low angle, and work the exit kerbs. Nothing here is far enough away to need
-      reach — pick a fence gap and let the field come to it.`,
-  },
-  'enkoping:0': {
-    desc: `A club circuit with more room than it looks: {lap} metres, {corners} corners, and a
-      {straight}-metre straight that finally lets a long lens breathe. The Enköping site carries
-      several loops in the OSM trace; the kart ring measured here is the one that gets raced.`,
-    plan: `Straight-on compression down the back straight, then swing round for the entry —
-      it is the only place on the calendar where 400mm earns its weight.`,
-  },
-  'jarfalla:0': {
-    desc: `{corners} corners inside {lap} metres — a corner every {perCorner} metres, the densest
-      layout in the season. Stockholm Race Weekend puts a full paddock onto a small site, so the
-      frames get busy, the backgrounds get difficult, and the access gets negotiated.`,
-    plan: `Shoot the paddock first while it is still legible. On track, look for the double-apex
-      section: it is the only place the karts are visibly working.`,
-  },
-  'linkoping:0': {
-    desc: `One Sunday, {km} kilometres each way, so it is a four-a.m. start or nothing. The layout
-      here is a hand trace scaled against the fitted venues rather than a geo fit, so read {lap}
-      metres as approximately {lap} metres and do not quote me on the last digit.`,
-    plan: `A single day means no second pass at anything. Walk the whole lap before first practice
-      and commit to three positions, not eight.`,
-  },
-  'gellerasen:0': {
-    desc: `The only full-size circuit in the atlas: {lap} metres, a {straight}-metre straight, and
-      corners old enough to have names — Tröskurvan, Esset, Hårnålen, Depåkurvan. Three days of
-      Kanonloppet, the one weekend a year Karlskoga is the loudest place in Värmland. Cars, not
-      karts: everything is faster, further away, and less forgiving of a slow shutter.`,
-    plan: `Hårnålen for the braking, the Esset for the direction change, and Tröskurvan late in the
-      day when the sun is finally behind the grandstand instead of in it.`,
-  },
-  'malmen:0': {
-    desc: `Not a circuit at all — an air base, and the Air Force's hundredth birthday. Two runways,
-      01/19 and 08/26, the longer of them {lap} metres of concrete. The subject arrives at
-      several hundred knots and does not come back round on a schedule, so the plan inverts: pick
-      a display axis, learn it, and then do not move for six hours.`,
-    plan: `Spotters day is the Friday before the public days — static aircraft on an empty apron
-      and no crowdline. That is the frame you cannot get on Saturday.`,
-  },
-  'rasbo:1': {
-    desc: `The same {lap} metres as April, five months of light later. Late September in Uppland
-      gives a low sun all day and a golden hour that arrives while the racing is still running —
-      the one date all season where the schedule and the light agree with each other.`,
-    plan: `Everything from the west side after three o'clock. Backlit dust off the kerbs is the
-      whole reason to come back to a circuit you already shot.`,
-  },
+  'rasbo:0':      { desc: `Season opener at the home circuit, {km} km up the road — {lap} metres and {corners} corners.` },
+  'halla:0':      { desc: `First MKR round of the year, and the tightest layout in the atlas: {corners} corners in {lap} metres.` },
+  'enkoping:0':   { desc: `A club circuit with more room than it looks — {lap} metres and a {straight}-metre straight.` },
+  'jarfalla:0':   { desc: `Stockholm Race Weekend, on the densest layout of the season: a corner every {perCorner} metres.` },
+  'linkoping:0':  { desc: `One Sunday, {km} km each way. The length is scaled from a hand trace, so read {lap} metres as approximate.` },
+  'gellerasen:0': { desc: `Three days of Kanonloppet on the only full-size circuit here — {lap} metres, cars rather than karts.` },
+  'malmen:0':     { desc: `Not a circuit but an air base, for the Air Force's hundredth: two runways, the longer {lap} metres.` },
+  'rasbo:1':      { desc: `The same {lap} metres as April, five months of light later — low sun all day by late September.` },
 };
 
 /* ====================================================================== data */
@@ -240,6 +197,13 @@ function shapeFrame(c, pad) {
   if (c.kind === 'art') return { vb: c.art.vb, sw: c.art.sw };
   return frame(c.path, pad);
 }
+
+/* What the reader is actually looking at. The caption used to say TRACED
+   CENTRELINE under everything, which stopped being true the moment the drawn
+   layouts arrived — and a label that describes the wrong source is worse than
+   no label on a page whose whole claim is that its numbers are honest. */
+const SOURCE_LABEL = { art: 'DRAWN LAYOUT', traced: 'HAND TRACE', sampled: 'TRACED CENTRELINE' };
+const sourceOf = (c) => (c && SOURCE_LABEL[c.kind]) || 'TRACED CENTRELINE';
 
 /* ================================================================ RENDERING */
 
@@ -402,10 +366,6 @@ function renderEntries() {
       <h2 class="entry-name rise" style="--d:.06s">${esc(v.short)}</h2>
       <div class="entry-where mono rise" style="--d:.1s">${esc(e.name)} · ${esc(v.city)}, Sweden</div>
       <div class="entry-desc rise" style="--d:.16s"><p>${fill(copy.desc, e)}</p></div>
-      <div class="forecast rise" style="--d:.22s">
-        <div class="lab mono">PLAN · ISSUED THIS CYCLE</div>
-        <p>${fill(copy.plan, e)}</p>
-      </div>
       <button class="entry-open mono rise" style="--d:.26s" type="button"
               data-route="date/${esc(e.key)}">
         <span>OPEN THIS DATE — DAY PLAN, GEAR, PACKING LIST</span>
@@ -425,7 +385,7 @@ function renderEntries() {
 
     right.innerHTML = `
       ${thumb ? `<div class="thumb rise" style="--d:.1s">${thumb}
-        <div class="cap mono"><span>${esc(v.name).toUpperCase()}</span><span>TRACED CENTRELINE</span></div></div>` : ''}
+        <div class="cap mono"><span>${esc(v.name).toUpperCase()}</span><span>${sourceOf(circuitFor(v))}</span></div></div>` : ''}
       <div class="spec rise" style="--d:.16s">${rows}</div>
       <div class="bars rise" style="--d:.2s">${barRows}</div>`;
 
@@ -650,7 +610,7 @@ function circuitPanel(id) {
     </div>
     <div class="p-grid">
       <div>${bigLayout(p)}
-        <div class="p-cap mono">${esc(p.name).toUpperCase()} · TRACED CENTRELINE</div></div>
+        <div class="p-cap mono">${esc(p.name).toUpperCase()} · ${sourceOf(circuitFor(p))}</div></div>
       <div>
         <section class="p-sec"><h3 class="mono">MEASURED</h3>
           <div class="spec">${rowsHtml(placeRows(p))}</div>
@@ -923,13 +883,19 @@ function boot() {
         out.innerHTML = `${c.text} <small>${esc(nxt.venue.short.toUpperCase())}</small>`;
       } else out.innerHTML = 'SEASON CLOSED';
     }
+    /* §01's roster and §02's entries both carry one of these per date, so this
+       runs over 16 nodes a second. Write only what actually changed: the text
+       every second, the colour perhaps twice a season. An unconditional
+       style.color assignment on every node every tick is a style
+       invalidation the page then has to resolve, and it bought nothing. */
     for (const n of cdNodes) {
       const e = EVENTS.find(x => x.key === n.dataset.cd);
       if (!e) continue;
       const c = countdown(e, now);
-      n.textContent = c.text;
-      n.style.color = c.state === 'past' ? 'var(--ink-4)'
+      if (n.textContent !== c.text) n.textContent = c.text;
+      const col = c.state === 'past' ? 'var(--ink-4)'
         : (c.state === 'live' ? 'var(--accent)' : 'var(--ink-2)');
+      if (n.dataset.cdCol !== col) { n.style.color = col; n.dataset.cdCol = col; }
     }
     // the open panel carries the same countdown, so it must tick too
     const pcd = document.querySelector('[data-panel-cd]');
