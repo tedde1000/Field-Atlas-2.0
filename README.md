@@ -216,8 +216,15 @@ Writes `trace/shots/*.png` — one per chapter, plus a day-side and two mobile f
 
 ## Notes
 
-- **Fonts** load from Google Fonts (Bodoni Moda, Newsreader, JetBrains Mono). 1.x
-  self-hosts its faces in `fonts/`; if 2.0 ever needs to work offline, do the same here.
+- **Fonts** load from Google Fonts — **Outfit**, one variable file over weights 300–800,
+  and nothing else. Session 4 replaced the original trio (Bodoni Moda display, Newsreader
+  body, JetBrains Mono labels) with a single geometric sans, so the page now separates its
+  registers by weight and tracking rather than by changing face. Two things follow from
+  that and are documented where they bite: `--font-mono` and the `.mono` class kept their
+  names but no longer mean monospaced, and every column that used to stay put because the
+  pitch was fixed — the ticking countdown above all — now asks for `tabular-nums`
+  explicitly. 1.x self-hosts its faces in `fonts/`; if 2.0 ever needs to work offline, do
+  the same here (PROMPT.md task 4 — now one family to download instead of three).
 - **Motion** respects `prefers-reduced-motion`, and the MOTION pill overrides it either
   way. With motion off the page is fully static and everything is legible.
 - **Day side** is not an inverted night side — the paper warms and the amber darkens so

@@ -4,10 +4,30 @@
  * is an instrument panel, this one is a printed observatory report.
  * ========================================================================== */
 :root {
-  /* --- type ------------------------------------------------------------- */
-  --font-display: 'Bodoni Moda', 'Didot', 'Times New Roman', serif;
-  --font-body: 'Newsreader', 'Iowan Old Style', Georgia, serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  /* --- type -------------------------------------------------------------
+   * ★ ONE FAMILY, THREE ROLES. Until session 4 this was a trio — Bodoni Moda
+   * for display, Newsreader for body, JetBrains Mono for labels — and the
+   * change of face was what separated them. It is now Outfit throughout, a
+   * geometric sans in the register Theodor asked for: single-storey `a`,
+   * circular `o`, ascenders above the cap line, single-storey `g`. WEIGHT and
+   * TRACKING do the separating instead, which is why every rule in app.css
+   * that used to lean on a face change now names a weight explicitly.
+   *
+   * Two consequences worth knowing before editing anything below:
+   *
+   *   1. `--font-mono` IS NOT MONOSPACED ANY MORE. The token and the `.mono`
+   *      class keep their names — they are on ~60 elements across index.html
+   *      and js/main.js — but the role they mark is "tracked-out label", not
+   *      "fixed pitch". Anything that was relying on fixed pitch to hold a
+   *      column still (the ticking countdown, the spec values) now needs
+   *      `font-variant-numeric: tabular-nums`, which app.css puts on `.mono`,
+   *      `.rail span` and `.num` so it is inherited rather than remembered.
+   *   2. Outfit is one variable file over 300–800. Every weight named in
+   *      app.css must sit inside that range or the browser synthesises it.
+   * --------------------------------------------------------------------- */
+  --font-display: 'Outfit', ui-sans-serif, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-body: 'Outfit', ui-sans-serif, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'Outfit', ui-sans-serif, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
 
   /* --- night side (default) --------------------------------------------- */
   --bg: #07080a;
@@ -38,7 +58,9 @@
   --bar-h: 54px;               /* fixed top bar */
   --rail-w: 46px;              /* the two vertical rails */
   --gutter: clamp(20px, 4.5vw, 76px);
-  --measure: 34rem;            /* body copy line length */
+  /* 32rem, not the 34rem the serif had: Outfit carries a much larger x-height,
+     so the same column ran ~8 characters longer than the measure was drawn for */
+  --measure: 32rem;            /* body copy line length */
   --ease: cubic-bezier(.22, .61, .36, 1);
   --ease-out: cubic-bezier(.16, 1, .3, 1);
 }
