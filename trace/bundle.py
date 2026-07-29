@@ -74,10 +74,12 @@ THUMBNAIL = """<template id="__bundler_thumbnail">
     <circle cx="176" cy="80" r="58" fill="none" stroke="#1d4359" stroke-width="1.4"/>
     <circle cx="176" cy="80" r="58" fill="#0b2130" opacity=".55"/>
     <circle cx="163" cy="58" r="2.6" fill="#c9974f"/>
-    <text x="20" y="74" fill="#ece5d9" font-family="Didot,serif" font-size="26">FIELD</text>
-    <text x="20" y="102" fill="#ece5d9" font-family="Didot,serif" font-size="26">ATLAS</text>
-    <text x="20" y="126" fill="#c9974f" font-family="monospace" font-size="8"
-          letter-spacing="2.2">VOL. II</text>
+    <text x="20" y="74" fill="#ece5d9" font-family="Outfit,system-ui,sans-serif"
+          font-size="26" font-weight="700" letter-spacing="-.7">FIELD</text>
+    <text x="20" y="102" fill="#ece5d9" font-family="Outfit,system-ui,sans-serif"
+          font-size="26" font-weight="700" letter-spacing="-.7">ATLAS</text>
+    <text x="20" y="126" fill="#c9974f" font-family="Outfit,system-ui,sans-serif" font-size="8"
+          font-weight="600" letter-spacing="2.2">VOL. II</text>
   </svg>
 </template>
 """

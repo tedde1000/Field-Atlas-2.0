@@ -280,8 +280,9 @@ match the 1.x listing.
 
 ## Task 4 — self-host the fonts
 
-Offline is impossible while `index.html` links `fonts.googleapis.com`. 2.0 uses
-**Bodoni Moda** (display), **Newsreader** (body), **JetBrains Mono** (labels).
+Offline is impossible while `index.html` links `fonts.googleapis.com`. Since session 4
+2.0 uses **one** family — **Outfit**, variable, weights 300–800 — for display, body and
+labels alike, so this is a single file to download rather than three.
 
 - Download woff2 for the weights actually used (check the `<link>` in `index.html`),
   subset `latin` + `latin-ext` — the venue names need `å ä ö`, and Örnsköldsvik must
