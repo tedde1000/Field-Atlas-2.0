@@ -1639,3 +1639,23 @@ function boot() {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
 else boot();
+
+/* ------------------------------------------------------------- the worker
+ * Registered after boot rather than before it, and off the `load` event, so
+ * installing the worker — which fetches the whole shell, earth images and all
+ * — cannot compete with the page's own first paint for bandwidth.
+ *
+ * Guarded three ways. `serviceWorker` is absent in older browsers; secure
+ * contexts only, which is https and localhost and nothing else; and the two
+ * .dc.html files run off file://, where `./sw.js` resolves to a path that does
+ * not exist and registration would throw on every open. See trace/bundle.mjs —
+ * the standalone pair is a single file on purpose and has nothing to cache.
+ * ---------------------------------------------------------------------- */
+if ('serviceWorker' in navigator && window.isSecureContext &&
+    location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(err => {
+      console.warn('[fa2] service worker did not register:', err);
+    });
+  }, { once: true });
+}

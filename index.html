@@ -8,7 +8,20 @@
 <meta name="theme-color" content="#07080a">
 <meta name="color-scheme" content="dark light">
 
+<!-- Installable: `display: standalone` in the manifest is what takes the browser
+     chrome away, both for Add to Home Screen and for the TWA wrapper. The colours
+     here and in the manifest are --bg from assets/tokens.css, so the splash cannot
+     flash white on a page that is otherwise never light unless asked. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Field Atlas 2">
+
+<!-- The tab icon stays inline: it costs no request and cannot 404, which matters
+     on the first paint of a cold offline launch. icons/ is for the launcher. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c9974f' stroke-width='1.6'%3E%3Cpath d='M1.6 12S6 5 12 5s10.4 7 10.4 7-4.4 7-10.4 7S1.6 12 1.6 12Z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=58e20153">
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -236,6 +249,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=3bae9c54"></script>
+<script type="module" src="js/main.js?v=8a8c7bf8"></script>
 </body>
 </html>

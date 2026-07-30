@@ -55,6 +55,11 @@ js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks and
 data/atlas.js            GENERATED — venues, events, circuits, metrics
 data/world.js            GENERATED — land outlines (Natural Earth 50m, simplified)
 
+manifest.webmanifest     the install manifest — name, colours, `display: standalone`
+sw.js                    the service worker: precache the shell, then work offline
+icons/                   GENERATED — the launcher icons, by trace/icons.mjs
+.nojekyll                Pages serves the tree as-is
+
 Field Atlas 2.0 (standalone-src).dc.html   GENERATED — the whole thing in one file
 Field Atlas 2.0.dc.html                    GENERATED — the same, minus the thumbnail
 
@@ -67,6 +72,7 @@ trace/bundle.py          js/ + assets/ + data/ + index.html -> the two .dc.html 
 trace/verify.mjs         headless smoke test
 trace/shots.mjs          one PNG per chapter, plus mobile and day side
 trace/shots/             the captures
+trace/icons.mjs          icons/ — the aperture mark, rasterised by headless Chrome
 trace/plate.html         DEV — the baked Earth plate, laid out flat, plus the sphere
 trace/figure.html        DEV — §03's racing line on its own, one circuit at a time
 PROMPT.md                the brief for the next session (bugs, features, shipping)
@@ -281,6 +287,43 @@ not an included angle, and are not bounded by 180°. Before this session the sam
 field was the sum of a ±3-node windowed curvature, which counted every segment
 about six times and once printed a 1371° corner; §12f pins it to the closed-loop
 invariant, which Gelleråsen and Rörken satisfy at exactly 360.0°.
+
+---
+
+## Installable, and what that costs you
+
+`manifest.webmanifest` + `sw.js` make 2.0 an installable PWA, which is what lets it
+go on a phone with no browser chrome — either through Chrome's **Add to Home
+screen**, or wrapped as a Trusted Web Activity APK the way 1.x is. Either way the
+app points at the live URL, so **a `git push` is the deploy** and no rebuild of
+anything native is needed.
+
+```bash
+node trace/icons.mjs        # regenerate icons/ from the aperture mark
+```
+
+Two things about the worker are worth knowing before you change it.
+
+- **Bump `CACHE_VERSION` in `sw.js` on every deploy.** `skipWaiting()` and
+  `clients.claim()` are carried over from 1.x for the reason 1.x has them: an
+  installed app has no reload button, so a push has to land on the next launch
+  rather than sit behind a worker that never activates.
+- ★ **The caching strategy is split on `?v=`, and that is load-bearing.** A URL
+  stamped by `trace/bundle.mjs` is immutable — its hash *is* its bytes — so it is
+  served cache-first forever, which is where the launch actually costs something
+  (three earth images, both stylesheets, the entry module). Everything else
+  same-origin is network-first, because the `js/*.js` specifiers live inside
+  JavaScript where the stamper cannot reach them, and serving *those* stale would
+  recreate exactly the half-state the stamping exists to prevent — a fresh
+  `index.html` beside a module from the previous deploy. They are small; the round
+  trip is worth it, and offline still works because the precache is complete rather
+  than partial.
+
+**Offline is complete except for the typeface.** The shell, the data, the earth
+imagery and the icons are all precached, and Outfit is cached from Google Fonts on
+the second load — so a cold first launch with no signal falls back to the system
+sans until the fonts have been seen once. PROMPT.md task 4 (self-host Outfit into
+`fonts/`) is what closes that, and is still open.
 
 ---
 
