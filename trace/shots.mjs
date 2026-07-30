@@ -1,25 +1,32 @@
 /* ===========================================================================
  * trace/shots.mjs — capture one PNG per chapter, plus a mobile pass.
  *
- * Serve first:  python3 -m http.server 8766 --directory "Field Atlas 2.0"
+ * Serve first:  python3 trace/serve.py
  * Then:         node trace/shots.mjs [outDir]
  *
  * Selectors are data-* / ids only (CONVENTIONS §10) — never rendered copy.
+ *
+ * The browser and puppeteer are found by trace/headless.mjs; FA2_CHROME,
+ * FA2_PUPPETEER and FA2_BASE override the per-platform defaults.
  * ======================================================================== */
-import puppeteer from '/Users/theodor/node_modules/puppeteer-core/lib/esm/puppeteer/puppeteer-core.js';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { findChrome, loadPuppeteer, LAUNCH_ARGS } from './headless.mjs';
+
+const puppeteer = await loadPuppeteer(import.meta.url);
 
 const BASE = process.env.FA2_BASE || 'http://localhost:8766/';
-const HERE = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
+/* fileURLToPath, not `new URL(...).pathname` — the latter yields "/C:/Users/…" on
+   Windows, which path.join then treats as a rooted POSIX path */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = process.argv[2] || path.join(HERE, 'shots');
 mkdirSync(OUT, { recursive: true });
 
 const browser = await puppeteer.launch({
-  executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  executablePath: findChrome(),
   headless: true,
-  args: ['--headless=new', '--window-size=1440,1000', '--force-device-scale-factor=1',
-         '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--hide-scrollbars'],
+  args: [...LAUNCH_ARGS, '--window-size=1440,1000', '--force-device-scale-factor=1'],
 });
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

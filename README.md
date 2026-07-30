@@ -37,11 +37,13 @@ Then open <http://localhost:8766/>. `.claude/launch.json` carries the same confi
 index.html               THE MASTER — the shell: chrome, five sections, empty hosts
 assets/tokens.css        every colour and face, night + day side
 assets/app.css           layout, chrome, sections, motion, the panel
+assets/earth-blue-marble-2048.jpg   NASA Blue Marble, public domain — the globe's surface
 js/main.js               data -> DOM, the editorial copy, wiring
-js/globe.js              orthographic Earth on a 2D canvas, with the pins
+js/globe.js              orthographic Earth on a 2D canvas, lit by the real sun
 js/starfield.js          the field behind everything
-js/circuit.js            §03 — particles round a traced racing line
-js/loop.js               one racing line: 1.x's corner-radius path, splines, flattening
+js/circuit.js            §03 — particles round a solved racing line
+js/loop.js               geometry: corner-radius paths, splines, flattening, corners,
+                         and the racing-line solver
 js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy signal
 js/panel.js              the detail overlay: routing, focus, history
 js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks
@@ -101,8 +103,64 @@ drift into being two different pages.
 | 00 | Overture | Title, lede, live countdown to the next date, the globe |
 | 01 | The Dates | Every booking in the season, one row each, in order |
 | 02 | The Season | One entry per date: summary, drawn layout, spec sheet, bars |
-| 03 | Anatomy of a Circuit | A traced racing line with particles and named corners |
+| 03 | Anatomy of a Circuit | A **solved** racing line, with the flow paced off its curvature |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
+
+### The globe is a lit satellite sphere, and the sun is the real one
+
+`js/globe.js` shades the disc per pixel: unproject each pixel back to a lat/lon,
+sample `assets/earth-blue-marble-2048.jpg`, and multiply by a Lambert term against
+a sun that is **fixed in world space** — so the camera drifts and the terminator
+does not go with it. The subsolar point comes from the standard low-precision solar
+position for `Date.now()`, which means the day side of the globe is the part of the
+Earth actually in daylight while you are reading.
+
+Three things about it are load-bearing:
+
+- **The plate must stay same-origin.** The shader reads it back with `getImageData`,
+  and a cross-origin or `file://` image taints the canvas, which throws. `index.html`
+  carries it as `#earth-plate`; `trace/bundle.py` rewrites that `src` to a `data:`
+  URI for the two `.dc.html` files, which is the only reason the standalone globe
+  has a surface at all. verify.mjs §11d asserts both halves of that.
+- **It is rastered small and scaled up** — at most 420px, 200px while the disc is
+  dimmed behind the scrim. The plate is pre-filtered to 1024×512 to match, because
+  sampling 2048 into 420 undersamples and every coastline crawls with alias as the
+  planet turns. The vector coastline is still stroked over the top at full
+  resolution, which is where the eye reads the edges.
+- **The per-ring land fills are gone.** 892 `Path2D` allocations and `fill()` calls
+  per frame paid for the surface pass. Only the batched stroke remains.
+
+### §03 draws a racing line now
+
+It used to draw the traced **centreline** with particles scattered either side of it
+by a random constant, under a caption that had said "RACING LINE" since session 1.
+`racingLine()` in `js/loop.js` solves for the real thing: one lateral offset per
+node inside a corridor the width of the track, relaxed toward minimum curvature and
+clamped to the kerbs. Wide in, apex, wide out, none of it hand-authored.
+
+It is solved **coarse-to-fine** and has to be — the Laplacian of a dense polyline
+goes as the square of the node spacing, so relaxing against immediate neighbours
+only would need on the order of a thousand sweeps to cross a 28px corridor. The
+corridor is 28px on screen at any zoom, which is roughly six times the real track
+width at a 1 200m lap, and the figure legend says so.
+
+### Corner numbers, and how the count is reconciled
+
+Panel layouts and §03 both number their turns. `numberedCorners()` finds runs of
+same-signed heading change, splits a run that is really two corners at the interior
+curvature minimum between them, and then keeps the sharpest `track.corners` of them
+— so the numbering agrees with the count in the spec table beside it.
+
+Where the drawing genuinely resolves fewer turns than the OSM centreline
+measurement did, **the caption says so** (`14 CORNERS · 12 RESOLVED HERE`) rather
+than quietly numbering fewer. 20 of the 22 circuits with a measured count reconcile
+exactly. verify.mjs §12c′ asserts a shortfall can never be silent.
+
+The degrees printed in §03's legend are **total heading change through the turn**,
+not an included angle, and are not bounded by 180°. Before this session the same
+field was the sum of a ±3-node windowed curvature, which counted every segment
+about six times and once printed a 1371° corner; §12f pins it to the closed-loop
+invariant, which Gelleråsen and Rörken satisfy at exactly 360.0°.
 
 ---
 
@@ -143,6 +201,13 @@ What the script computes, rather than copies:
   so sweepers score one and chicanes score two.
 - **Longest straight** — the longest run under 3.2° of curvature.
 - **Distance and bearing** — great-circle from Uppsala (`HOME` in `extract.py`).
+  **Still computed, no longer printed.** Session 5 took distance off the page —
+  Theodor: "how long distance it is from a place, you don't really need to have
+  that; it's enough with saying where it is, like under coordinates, say closest
+  city." So the `FROM UPPSALA` rows, the `REACH` bar and the `183 KM WSW` in each
+  catalogue cell are gone, replaced by the coordinate and the nearest city. The
+  fields stay in `data/atlas.js` because that file is generated and dropping them
+  is a pipeline change, not a page change.
 
 Linköpings Motorstadion has a hand trace but no geo fit in 1.x, so its length is
 scaled by the median px-per-metre of the venues that have both. It is marked `est.`
@@ -189,7 +254,18 @@ Malmen is an air base, not a circuit: it reports runway lengths and no corners.
 node trace/verify.mjs
 ```
 
-100 checks in headless Chrome: no page errors, every section renders the right
+It runs anywhere now. The puppeteer and Chrome paths used to be hardcoded to one
+laptop (`/Users/theodor/node_modules/…`, `/Applications/Google Chrome.app/…`), so
+"green" could not be checked from any other machine. Both are resolved
+per-platform, with env overrides:
+
+```bash
+FA2_CHROME=…      a Chrome/Chromium binary   (auto-detected on macOS/Windows/Linux)
+FA2_PUPPETEER=…   puppeteer-core's ESM entry (resolved from node_modules if present)
+FA2_BASE=…        where the site is served   (default http://localhost:8766/)
+```
+
+148 checks in headless Chrome: no page errors, every section renders the right
 number of things, the numbers on the page equal the numbers in `data/atlas.js`,
 the countdown ticks, both pills work and persist, deep links land, nothing
 overflows sideways at 390 / 768 / 1440 / 1920, the panel routes and traps focus,
@@ -204,7 +280,18 @@ land: that the open panel is on screen, that no inline icon has inflated past
 control ended up with a 372px arrow), that every track layout dashes its whole
 lap, that the dimmed globe backs off while the reader scrolls, and that land
 rings reach the canvas point-for-point. §11 boots both `.dc.html` files and
-proves they build the same page, including off `file://`.
+proves they build the same page, including off `file://` — and that the Earth plate
+survives the trip as a `data:` URI, which is the one thing in §11 that fails
+silently. §12 covers session 5: that the racing line actually swings across the
+road, that no layout under-numbers its corners without saying so, that no layout
+emits a `NaN` attribute or a numeral outside its frame, and that the sun does not
+turn with the camera.
+
+One trap worth knowing before you tune a sleep against it: **the idle globe drift is
+frame-rate-limited under headless.** `dt` in `js/globe.js` is clamped to 0.05 s so a
+stalled tab cannot teleport the planet, and swiftshader schedules `rAF` at about
+3 Hz — so the 0.9°/s drift runs at roughly 0.15°/s under the suite. §12d moves the
+camera with a real `lookAt` instead of waiting for the drift.
 
 ```bash
 node trace/shots.mjs
@@ -226,7 +313,19 @@ Writes `trace/shots/*.png` — one per chapter, plus a day-side and two mobile f
   explicitly. 1.x self-hosts its faces in `fonts/`; if 2.0 ever needs to work offline, do
   the same here (PROMPT.md task 4 — now one family to download instead of three).
 - **Motion** respects `prefers-reduced-motion`, and the MOTION pill overrides it either
-  way. With motion off the page is fully static and everything is legible.
+  way. With motion off the page is fully static and everything is legible — with one
+  deliberate exception: the globe's still-frame signature carries the subsolar
+  longitude rounded to the whole degree, so the lighting is allowed to update about
+  fifteen times an hour rather than freezing at whatever it was when MOTION went off.
+  One degree of subsolar longitude is four minutes.
+- **There is no reticle.** A 34px crosshair used to ease toward a per-chapter
+  sightline on its own `rAF` loop, wobbling on two out-of-phase sine waves. Removed
+  at Theodor's request — it read as a cursor the reader did not control, and it held
+  a `requestAnimationFrame` loop open for the life of the page to animate decoration.
+  The crosshair still visible beside the hero title is `.hero-mark`, which is part of
+  the `<h1>` and does not move.
+- **There is no colophon.** The provenance paragraph that used to sit in the footer is
+  in this file, which is where it belongs.
 - **Day side** is not an inverted night side — the paper warms and the amber darkens so
   the mono labels keep their weight. The globe drops to 34% opacity because a lit ocean
   behind body copy is unreadable.

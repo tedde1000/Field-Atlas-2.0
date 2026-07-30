@@ -41,8 +41,69 @@ import { LAND } from '../data/world.js';
 const RAD = Math.PI / 180;
 const TAU = Math.PI * 2;
 
-/* the sun sits up and to the left, so the lit limb reads along the top-left edge */
-const SUN = { x: -0.62, y: -0.5, z: 0.6 };
+/* ===================================================== THE SUN, AND WHERE IT IS
+ * ★ THE LIGHT COMES FROM A FIXED POINT IN SPACE NOW, NOT FROM THE CAMERA.
+ *
+ * Theodor: "from a specific point, like a sun. You're never gonna see it, but when
+ * the earth rotates, the light isn't gonna change only, like, at the earth —
+ * because there's light coming from a specific point."
+ *
+ * What was here was a radial gradient at a fixed offset from the centre of the
+ * canvas: `SUN = {x: -0.62, y: -0.5, z: 0.6}`, baked once into an offscreen layer
+ * and blitted. Being fixed in SCREEN space, it rode along with the camera — the
+ * terminator sat in the same corner of the disc forever, so the planet turned and
+ * the lit region did not, which is exactly the thing he is describing. It also
+ * meant the shading was a soft blob rather than a great circle, which is the note
+ * PROMPT.md Task 2 already had against it ("the terminator is not a real
+ * terminator … that is probably the thing that stops it looking like a lit
+ * sphere").
+ *
+ * So the sun is a direction in WORLD space, the shading is a real Lambert term
+ * against the surface normal, and the terminator is wherever those two are
+ * perpendicular. The camera drifts; the light does not move with it.
+ *
+ * And since it had to be somewhere, it is where the sun actually is. This is the
+ * standard low-precision solar position (NOAA / Astronomical Almanac form, good
+ * to about 0.01° for any date this page will ever be open), so the day side of
+ * the globe is the part of the Earth that is genuinely in daylight while you are
+ * reading. On a page whose whole subject is dates and light, an invented sun
+ * angle would have been the one decorative number in it.
+ * ========================================================================= */
+function subsolar(ms) {
+  const n = ms / 86400000 + 2440587.5 - 2451545.0;      // days from J2000.0
+  const L = (280.460 + 0.9856474 * n) * RAD;            // mean longitude
+  const g = (357.528 + 0.9856003 * n) * RAD;            // mean anomaly
+  const lam = L + (1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * RAD;
+  const eps = (23.439 - 4e-7 * n) * RAD;                // obliquity of the ecliptic
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
+  // Greenwich mean sidereal time, in degrees, reduced to [0, 360)
+  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
+  let lon = (ra / RAD - gmst) % 360;
+  if (lon > 180) lon -= 360;
+  if (lon < -180) lon += 360;
+  return { lat: dec / RAD, lon };
+}
+
+/* How dark the night side gets. Not zero: the globe sits behind body copy at low
+   opacity and a hemisphere of pure black reads as a bite taken out of the disc
+   rather than as night. Earthshine and airglow are a real thing anyway. */
+const NIGHT = 0.085;
+
+/* ★ THE SURFACE RASTER IS CAPPED, AND THAT IS THE WHOLE PERFORMANCE STORY.
+ *
+ * Shading the sphere is per-pixel work: unproject, sample the plate, apply the
+ * Lambert term. At the hero the disc is ~660px across, which is 342 000 pixels
+ * inside the limb, and doing that at 30 Hz is not affordable on a page that also
+ * carries two other canvases and a backdrop-filter.
+ *
+ * It does not need to be full resolution. The plate is 2048x1024, so the visible
+ * hemisphere is 1024 texels wide however big the disc is — at 420px the raster is
+ * still oversampling the source, and the vector coastline stroke is drawn on top
+ * at full resolution afterwards, which is what the eye reads the edges off. So the
+ * surface is rastered into at most a 420px square and scaled up with smoothing:
+ * ~138 000 pixels instead of 342 000, and identical to look at. */
+const RASTER_MAX = 420;
 
 /* ★ HOW FAR THE ATMOSPHERE REACHES PAST THE SURFACE, and therefore how much of
  * the canvas is NOT planet.
@@ -129,6 +190,60 @@ function packRing(pts) {
 
 const LAND_RINGS = LAND.filter(r => r.length >= 5).map(packRing);
 
+/* ============================================================== THE EARTH PLATE
+ * NASA Blue Marble, land + shallow bathymetry, equirectangular, public domain —
+ * assets/earth-blue-marble-2048.jpg, carried in the document as #earth-plate so
+ * trace/bundle.py can rewrite it to a data: URI for the two .dc.html files. See
+ * the comment beside that tag: it MUST stay same-origin or the read below throws
+ * and the globe falls back to flat vector land for good.
+ *
+ * ★ IT IS DOWNSAMPLED TO 1024x512 ON PURPOSE, AND THE NUMBER IS NOT ARBITRARY.
+ *
+ * The surface raster is at most RASTER_MAX (420) across, so the visible hemisphere
+ * gets 420 pixels. Sampling a 2048-wide plate into that is a 2.4x UNDERSAMPLE,
+ * and undersampling is the one artefact bilinear filtering cannot help with: every
+ * coastline crawls with alias as the planet drifts, which on something rotating at
+ * 0.9°/s is the most visible thing on the page. Pre-filtering the plate to one mip
+ * level — done by the browser's own scaler, which box-filters — puts 512 texels
+ * across those 420 pixels, a mild oversample, and bilinear then lands clean. It
+ * also quarters the working set to 2 MB.
+ * ========================================================================= */
+const PLATE_W = 1024, PLATE_H = 512;
+const PLATE = { px: null, ready: false, failed: false, waiting: [] };
+
+function loadPlate() {
+  const img = typeof document !== 'undefined' && document.getElementById('earth-plate');
+  if (!img) { PLATE.failed = true; return; }
+
+  const grab = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = PLATE_W; c.height = PLATE_H;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.imageSmoothingEnabled = true;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0, PLATE_W, PLATE_H);
+      PLATE.px = g.getImageData(0, 0, PLATE_W, PLATE_H).data;
+      PLATE.ready = true;
+    } catch {
+      /* a cross-origin or file:// image taints the canvas and getImageData throws.
+         Not fatal and not silent: the globe keeps its vector land and says so. */
+      PLATE.failed = true;
+    }
+    PLATE.waiting.splice(0).forEach(fn => fn());
+  };
+
+  if (img.complete && img.naturalWidth) grab();
+  else {
+    img.addEventListener('load', grab, { once: true });
+    img.addEventListener('error', () => {
+      PLATE.failed = true;
+      PLATE.waiting.splice(0).forEach(fn => fn());
+    }, { once: true });
+  }
+}
+loadPlate();
+
 /* the 20° graticule, packed the same way so it draws through the same loop */
 const GRATICULE = (() => {
   const out = [];
@@ -191,12 +306,18 @@ export function createGlobe(canvas, opts = {}) {
     layers.dirty = true;
   }
 
-  /* ================================================= the cached still layers
-   * Everything that does not move with the camera, rendered once. `below` goes
-   * under the land, `shade` and `rim` go over the graticule — rim with 'lighter',
-   * which is plain addition, so blitting it composites identically to filling it.
+  /* ================================================= the cached still layer
+   * ★ THERE USED TO BE THREE OF THESE AND NOW THERE IS ONE.
+   *
+   * `below` (halo + a lit ocean gradient), `shade` (the terminator + the limb) and
+   * `rim` (additive light on the lit edge) were all fixed in SCREEN space, which is
+   * what made the lighting ride along with the camera. The ocean, the terminator
+   * and the rim are all functions of the sun direction and the surface normal, so
+   * they belong in the per-pixel surface pass — see buildSurface() — and they are
+   * there now. What is left is genuinely camera-independent: the ring of
+   * atmosphere OUTSIDE the limb, which depends only on the radius and the theme.
    * ====================================================================== */
-  const layers = { dirty: true, theme: null, below: null, shade: null, rim: null, accent: '', ink: '' };
+  const layers = { dirty: true, theme: null, air: null, accent: '', ink: '' };
 
   function makeLayer() {
     const c = document.createElement('canvas');
@@ -209,10 +330,7 @@ export function createGlobe(canvas, opts = {}) {
 
   function buildLayers(isDay) {
     const { cx, cy, r } = state;
-    const disc = (g) => { g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.clip(); };
-    const lx = cx + SUN.x * r * 0.72, ly = cy + SUN.y * r * 0.72;
 
-    /* -- below: the air outside the limb, then the lit ocean inside it -- */
     const b = makeLayer();
     const halo = b.g.createRadialGradient(cx, cy, r * 0.965, cx, cy, r * HALO);
     halo.addColorStop(0, isDay ? 'rgba(90,130,160,.30)' : 'rgba(96,158,196,.26)');
@@ -224,47 +342,160 @@ export function createGlobe(canvas, opts = {}) {
     // gets tighter than HALO again, show the box instead of the atmosphere
     b.g.beginPath(); b.g.arc(cx, cy, r * HALO, 0, TAU); b.g.fill();
 
-    b.g.save(); disc(b.g);
-    const sea = b.g.createRadialGradient(lx, ly, r * 0.04, cx - SUN.x * r * .3, cy - SUN.y * r * .3, r * 1.5);
-    if (isDay) {
-      sea.addColorStop(0, '#2f5f7d'); sea.addColorStop(0.45, '#1d4359'); sea.addColorStop(1, '#0c2130');
-    } else {
-      sea.addColorStop(0, '#12333f'); sea.addColorStop(0.42, '#0b2130'); sea.addColorStop(1, '#040a10');
-    }
-    b.g.fillStyle = sea;
-    b.g.fillRect(cx - r, cy - r, r * 2, r * 2);
-    b.g.restore();
-
-    /* -- shade: the terminator, then the limb itself -- */
-    const s = makeLayer();
-    s.g.save(); disc(s.g);
-    const term = s.g.createRadialGradient(lx, ly, r * 0.12, cx - SUN.x * r, cy - SUN.y * r, r * 1.72);
-    term.addColorStop(0, 'rgba(0,0,0,0)');
-    term.addColorStop(0.42, isDay ? 'rgba(6,10,16,.16)' : 'rgba(3,5,8,.42)');
-    term.addColorStop(1, isDay ? 'rgba(4,7,12,.62)' : 'rgba(2,3,5,.95)');
-    s.g.fillStyle = term;
-    s.g.fillRect(cx - r, cy - r, r * 2, r * 2);
-    s.g.restore();
-    s.g.strokeStyle = isDay ? 'rgba(30,40,50,.35)' : 'rgba(150,200,230,.22)';
-    s.g.lineWidth = 1;
-    s.g.beginPath(); s.g.arc(cx, cy, r, 0, TAU); s.g.stroke();
-
-    /* -- rim: additive light along the lit limb, blitted with 'lighter' -- */
-    const m = makeLayer();
-    m.g.save(); disc(m.g);
-    const rim = m.g.createRadialGradient(cx, cy, r * 0.9, cx, cy, r);
-    rim.addColorStop(0, 'rgba(0,0,0,0)');
-    rim.addColorStop(1, isDay ? 'rgba(150,190,220,.34)' : 'rgba(120,190,230,.30)');
-    m.g.fillStyle = rim;
-    m.g.fillRect(cx - r, cy - r, r * 2, r * 2);
-    m.g.restore();
-
-    layers.below = b.c; layers.shade = s.c; layers.rim = m.c;
+    layers.air = b.c;
     // getPropertyValue forces a style read, so the tokens are cached here too
     layers.accent = tok('--accent', '#c9974f');
     layers.ink = tok('--ink', '#ece5d9');
     layers.theme = isDay ? 'day' : 'night';
     layers.dirty = false;
+  }
+
+  /* ======================================================= THE SURFACE PASS
+   * One ImageData, rebuilt each paint: unproject every pixel inside the limb back
+   * to a latitude and longitude, sample the Blue Marble plate there, and multiply
+   * by the Lambert term against a sun that is fixed in WORLD space. That last part
+   * is the whole point — see the note over subsolar() at the top of this file.
+   *
+   * The maths, per pixel, with the disc centred and v measured upward:
+   *
+   *   u, v            the pixel, in units of the globe radius
+   *   w = √(1−u²−v²)  the third component of the surface normal, toward the camera
+   *   lat = asin(w·sinφ₀ + v·cosφ₀)
+   *   lon = λ₀ + atan2(u, w·cosφ₀ − v·sinφ₀)
+   *   L   = u·sx + v·sy + w·sz          the Lambert term, sun in camera basis
+   *
+   * ★ IT IS RASTERED SMALL AND SCALED UP. See RASTER_MAX. The vector coastline is
+   * still stroked over the top at full resolution, which is where the eye actually
+   * reads the edges, so the softness costs nothing.
+   *
+   * ★ THE ROW SPAN IS COMPUTED, NOT TESTED. For each row, u only reaches
+   * ±√(1−v²), so the loop starts and ends there instead of walking the full width
+   * and rejecting a fifth of it — and the inner loop then has no branch in it at
+   * all except the plate sample.
+   * ==================================================================== */
+  const surf = { c: null, g: null, img: null, size: 0 };
+
+  function surfaceSize() {
+    /* Past the hero the disc is at ~14% opacity behind #scrim, and nobody can see
+       a texel there — so it rasters at 200px and the per-pixel cost drops by two
+       thirds exactly where it is least worth paying. Above that it is the subject. */
+    const cap = state.dim < 0.35 ? 200 : RASTER_MAX;
+    return Math.min(cap, Math.max(16, Math.round(state.r * 2)));
+  }
+
+  function buildSurface(isDay) {
+    const R = surfaceSize();
+    if (surf.size !== R) {
+      surf.c = document.createElement('canvas');
+      surf.c.width = surf.c.height = R;
+      surf.g = surf.c.getContext('2d');
+      surf.img = surf.g.createImageData(R, R);
+      surf.size = R;
+    }
+    const out = surf.img.data;
+    out.fill(0);
+
+    const half = R / 2, inv = 1 / half;
+    const { sLat, cLat } = cam;
+
+    /* the sun, rotated into the camera's basis — once per frame, not per pixel */
+    const s = subsolar(Date.now());
+    const sp = s.lat * RAD, sl = s.lon * RAD;
+    const scl = Math.cos(sp);
+    const sa = scl * Math.sin(sl), sb = scl * Math.cos(sl), sc = Math.sin(sp);
+    const SP = sb * cam.cLon + sa * cam.sLon;
+    const sx = sa * cam.cLon - sb * cam.sLon;
+    const sy = cam.cLat * sc - cam.sLat * SP;
+    const sz = cam.sLat * sc + cam.cLat * SP;
+
+    const px = PLATE.px;
+    const INV_PI = 1 / Math.PI;
+    const lon0 = state.lon * RAD;
+    /* The day theme is not an inverted night theme anywhere else on this page and it
+       is not here either — see the note at the end of README.md.
+       ★ The DAY side needs MORE contrast between lit and unlit, not less. app.css
+       holds the disc at 34% opacity there so a lit ocean does not sit behind body
+       copy, and at 34% over warm paper a gentle terminator washes out completely —
+       the sphere reads as one flat grey coin and the whole point of a real sun is
+       lost. So the day pass runs a wider lit:unlit ratio (≈11:1 against night's
+       ≈10:1 before the opacity is applied) and the CSS opacity is left exactly where
+       session 4 set it. */
+    const gain = isDay ? 1.34 : 0.92;
+    const ambient = isDay ? NIGHT * 1.35 : NIGHT;
+
+    for (let py = 0; py < R; py++) {
+      const v = -((py + 0.5) - half) * inv;
+      const vv = 1 - v * v;
+      if (vv <= 0) continue;
+      const span = Math.sqrt(vv);
+      const x0 = Math.max(0, Math.ceil(half - span * half - 0.5));
+      const x1 = Math.min(R - 1, Math.floor(half + span * half - 0.5));
+      // the parts of the unprojection that do not vary along the row
+      const vLat = v * cLat, vDen = -v * sLat;
+      let o = (py * R + x0) * 4;
+
+      for (let pxi = x0; pxi <= x1; pxi++, o += 4) {
+        const u = ((pxi + 0.5) - half) * inv;
+        const w2 = 1 - u * u - v * v;
+        if (w2 <= 0) continue;
+        const w = Math.sqrt(w2);
+
+        // -- the Lambert term first: a night-side pixel still needs the plate, but
+        //    a pixel outside the disc never gets here at all
+        let L = u * sx + v * sy + w * sz;
+        /* A hard L>0 cut gives a terminator one pixel wide, and the real one is a
+           few hundred kilometres of twilight. Softened over ±0.16 of the cosine,
+           which is about 9° of arc — close enough to civil twilight to read right. */
+        let lit = L <= -0.16 ? 0 : (L >= 0.16 ? 1 : (L + 0.16) / 0.32);
+        lit = lit * lit * (3 - 2 * lit);                 // smoothstep
+        const shade = ambient + (gain - ambient) * lit;
+
+        let rr, gg, bb;
+        if (px) {
+          /* the inverse orthographic. `vLat` and `vDen` are the v-only halves of
+             these two expressions, lifted out of the row; w varies along it and so
+             stays inside. */
+          const lat = Math.asin(w * sLat + vLat);
+          const lam = lon0 + Math.atan2(u, w * cLat + vDen);
+
+          let tx = (lam * INV_PI * 0.5 + 0.5) * PLATE_W;
+          tx = tx - Math.floor(tx / PLATE_W) * PLATE_W;   // wrap the seam
+          const ty = (0.5 - lat * INV_PI) * PLATE_H;
+
+          const ix = tx | 0, iy = ty < 0 ? 0 : (ty > PLATE_H - 1 ? PLATE_H - 1 : ty | 0);
+          const fx = tx - ix, fy = ty - iy;
+          const ix1 = ix + 1 >= PLATE_W ? 0 : ix + 1;
+          const iy1 = iy + 1 >= PLATE_H ? PLATE_H - 1 : iy + 1;
+          const r0 = (iy * PLATE_W) * 4, r1 = (iy1 * PLATE_W) * 4;
+          const a0 = r0 + ix * 4, b0 = r0 + ix1 * 4;
+          const a1 = r1 + ix * 4, b1 = r1 + ix1 * 4;
+          const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+          const w01 = (1 - fx) * fy, w11 = fx * fy;
+          rr = px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11;
+          gg = px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11;
+          bb = px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11;
+        } else {
+          // the plate has not decoded yet, or could not be read — a plain ocean, so
+          // the disc is never a hole while the image is in flight
+          rr = 18; gg = 52; bb = 70;
+        }
+
+        /* Atmosphere on the way out: a fresnel term toward the limb, tinted blue
+           and scaled by how lit that part of the limb is. This is the `rim` layer
+           the old code blitted in screen space, except that it now follows the sun
+           — the bright crescent is on the day edge, wherever that has got to. */
+        const fres = 1 - w;
+        const glow = fres * fres * fres * 0.85 * lit;
+
+        out[o]     = rr * shade + 120 * glow;
+        out[o + 1] = gg * shade + 172 * glow;
+        out[o + 2] = bb * shade + 214 * glow;
+        out[o + 3] = 255;
+      }
+    }
+
+    surf.g.putImageData(surf.img, 0, 0);
+    return surf.c;
   }
 
   /* ----------------------------------------------------- the projection */
@@ -364,51 +595,51 @@ export function createGlobe(canvas, opts = {}) {
 
     setCam();
 
-    // -- the still layers below the land: air, then ocean
-    ctx.drawImage(layers.below, 0, 0, w, h);
+    // -- the atmosphere ring outside the limb
+    ctx.drawImage(layers.air, 0, 0, w, h);
 
     ctx.save();
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.clip();
 
-    // -- land. Decimation widens as the rendered globe shrinks, but never so far
-    //    that a six-point island collapses into a triangle.
-    /* ★ Each ring is FILLED SEPARATELY, and that is deliberate — do not "optimise"
-     * this into one batched fill. A ring that crosses the limb is drawn as runs of
-     * visible points, so it is not a well-formed closed polygon; batching those
-     * into one Path2D makes the nonzero winding rule punch holes at random, and
-     * the visible result is Europe and the Mediterranean rendering as sea. The
-     * STROKE has no winding rule, so that one is safely batched. */
-    /* ★ DO NOT INDEX-DECIMATE THESE RINGS. They arrive from trace/extract.py
-     * already run through Douglas-Peucker at 0.05°, and DP output is the
-     * opposite of uniform: every surviving point is load-bearing, kept
-     * precisely because dropping it would move the outline. Taking every
-     * *other* one therefore does not halve the detail, it deletes the corners —
-     * measured at a 440px disc with the old `base = 2`, Italy disappeared into
-     * the Adriatic, Greece and Denmark became blobs, Cyprus became a rectangle,
-     * and thin coastal features collapsed into stray slivers lying in the sea.
-     * That is the "weird stuff in some countries" this fix is for; compare
-     * trace/shots/globe/*-step1 against the frames beside them.
+    /* -- the surface: Blue Marble, lit by the real sun. Rastered small (see
+     *    RASTER_MAX) and scaled up here, which is the one place smoothing is
+     *    wanted — the alternative is visible raster pixels at the limb. */
+    const surface = buildSurface(isDay);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(surface, cx - r, cy - r, r * 2, r * 2);
+
+    /* -- the coastline, stroked over the imagery.
      *
-     * The old ladder was written against RAW 50m, which does carry a uniform
-     * ~0.1–0.3° between points and can survive being sampled. The data stopped
-     * being raw when the simplify step landed; the ladder did not notice, and
-     * the comment describing it had been stale ever since.
+     * ★ THE PER-RING FILLS ARE GONE, and that is the change that pays for the
+     * surface pass. Filling 892 rings meant a Path2D allocation and a fill() each,
+     * separately, because a ring crossing the limb is not a well-formed polygon and
+     * batching them made the nonzero winding rule punch holes at random (Europe and
+     * the Mediterranean rendered as sea). The plate draws the land now, so there is
+     * nothing left to fill — and the STROKE has no winding rule, so the one thing
+     * that remains was always safe to batch into a single path.
      *
-     * Skipping it back is also worth very little: projection is eleven
-     * multiplies out of the packed cache with no trigonometry, so the whole
-     * 19 667-point set costs far less than the per-ring Path2D and fill() that
-     * the size cull above already removes. Below ~150px across, nothing on the
-     * disc resolves anyway and every 2nd point is safe. */
+     * It is kept, quietly, for two reasons: it is a full-resolution edge over an
+     * upscaled raster, which is what stops the coastlines looking soft; and this is
+     * an atlas, so a struck coastline is the house style.
+     *
+     * ★ STILL DO NOT INDEX-DECIMATE THESE RINGS. They arrive from trace/extract.py
+     * already run through Douglas-Peucker at 0.05°, and DP output is the opposite
+     * of uniform: every surviving point is load-bearing, kept precisely because
+     * dropping it would move the outline. Taking every *other* one does not halve
+     * the detail, it deletes the corners — measured at a 440px disc with the old
+     * `base = 2`, Italy disappeared into the Adriatic, Greece and Denmark became
+     * blobs, Cyprus became a rectangle, and thin coastal features collapsed into
+     * slivers lying in the sea. That is the "weird stuff in some countries" this
+     * guard is for; compare trace/shots/globe/*-step1 against the frames beside
+     * them. Below ~150px across nothing on the disc resolves anyway. */
     const base = r > 150 ? 1 : 2;
     const outline = new Path2D();
-    ctx.fillStyle = isDay ? 'rgba(196,186,160,.92)' : 'rgba(126,124,108,.5)';
     for (const ring of LAND_RINGS) {
       if (!ringVisible(ring, r)) continue;
-      const p = new Path2D();
-      ringInto(p, outline, ring, Math.min(base, Math.max(1, Math.floor(ring.n / 6))));
-      ctx.fill(p);
+      ringInto(null, outline, ring, Math.min(base, Math.max(1, Math.floor(ring.n / 6))));
     }
-    ctx.strokeStyle = isDay ? 'rgba(60,58,46,.35)' : 'rgba(196,186,160,.28)';
+    ctx.strokeStyle = isDay ? 'rgba(24,22,16,.30)' : 'rgba(226,236,244,.20)';
     ctx.lineWidth = 0.7;
     ctx.stroke(outline);
 
@@ -420,17 +651,16 @@ export function createGlobe(canvas, opts = {}) {
       if (!ringVisible(ring, r)) continue;
       ringInto(null, grat, ring, gstep);
     }
-    ctx.strokeStyle = isDay ? 'rgba(20,20,14,.13)' : 'rgba(236,229,217,.085)';
+    ctx.strokeStyle = isDay ? 'rgba(20,20,14,.13)' : 'rgba(236,229,217,.075)';
     ctx.lineWidth = 0.6;
     ctx.stroke(grat);
 
-    // -- terminator + limb, then the additive rim
-    ctx.drawImage(layers.shade, 0, 0, w, h);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.drawImage(layers.rim, 0, 0, w, h);
-    ctx.globalCompositeOperation = 'source-over';
-
     ctx.restore();
+
+    // -- the limb itself, struck once, outside the clip so it is not half-cut
+    ctx.strokeStyle = isDay ? 'rgba(30,40,50,.35)' : 'rgba(150,200,230,.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
 
     // -- pins ------------------------------------------------------------
     const t = performance.now() / 1000;
@@ -524,9 +754,16 @@ export function createGlobe(canvas, opts = {}) {
          budget, forever, with motion off. verify.mjs §8 caught it: the starfield
          sat correctly at 0 Hz while the globe ran at its budget beside it.
          With motion off, paint only when something has genuinely changed. */
+      /* ★ The sun is in the signature, rounded to the whole degree. It has to be:
+         the terminator is real now, so it creeps 15°/hour whether or not the
+         camera is moving, and leaving it out would freeze the lighting at whatever
+         it was when MOTION was switched off. One degree of subsolar longitude is
+         four minutes, so this repaints about fifteen times an hour — static by any
+         measure that matters, and honest about where the daylight is. */
       const sig = state.lon.toFixed(2) + '|' + state.lat.toFixed(2) + '|' +
                   state.dim.toFixed(2) + '|' + state.focus + '|' +
-                  document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h;
+                  document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h +
+                  '|' + Math.round(subsolar(Date.now()).lon) + '|' + (PLATE.ready ? 1 : 0);
       if (sig === stillSig && !layers.dirty) return;
       stillSig = sig;
     }
@@ -568,8 +805,19 @@ export function createGlobe(canvas, opts = {}) {
     canvas.dataset.lon = state.lon.toFixed(1);
     canvas.dataset.lat = state.lat.toFixed(1);
     canvas.dataset.paints = ++paints;
+    /* ★ The sun, published for the same reason: verify.mjs §10 has to be able to
+       prove the light is fixed in WORLD space, and the only way to do that from
+       outside a canvas is to compare where the sun is against where the camera is
+       and assert the two move independently. `plate` says whether the imagery
+       actually made it in, so a tainted or missing texture fails loudly instead of
+       quietly degrading to the old flat globe. */
+    const sun = subsolar(Date.now());
+    canvas.dataset.sunLat = sun.lat.toFixed(2);
+    canvas.dataset.sunLon = sun.lon.toFixed(2);
+    canvas.dataset.plate = PLATE.ready ? 'ready' : (PLATE.failed ? 'failed' : 'loading');
 
     paint();
+    canvas.dataset.raster = String(surf.size);   // set by paint(), so read it after
   }
 
   /* ------------------------------------------------------------- public */
@@ -644,6 +892,15 @@ export function createGlobe(canvas, opts = {}) {
   };
 
   resize();
+
+  /* The plate is very likely still decoding when the first frame goes out, and with
+     MOTION off nothing would ever ask for another one — the still signature would
+     have already been written. So take a repaint when the imagery lands (or fails),
+     which the signature also covers, and clear the layer cache with it. */
+  if (!PLATE.ready && !PLATE.failed) {
+    PLATE.waiting.push(() => { layers.dirty = true; lastPaint = -1e9; stillSig = ''; });
+  }
+
   raf = requestAnimationFrame(frame);
   return api;
 }

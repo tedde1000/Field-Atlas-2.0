@@ -14,8 +14,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300..800&display=swap" rel="stylesheet">
 
-<link rel="stylesheet" href="assets/tokens.css?v=202054ef">
-<link rel="stylesheet" href="assets/app.css?v=8ec0a94e">
+<link rel="stylesheet" href="assets/tokens.css?v=502e59e0">
+<link rel="stylesheet" href="assets/app.css?v=8368a3a7">
 </head>
 <body>
 
@@ -26,14 +26,14 @@
 <div id="globe-wrap" aria-hidden="true"><canvas id="globe"></canvas></div>
 <div id="scrim" aria-hidden="true"></div>
 
-<!-- the reticle that eases toward whatever section you are reading -->
-<div id="reticle" aria-hidden="true">
-  <svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="1">
-    <circle cx="17" cy="17" r="8.5"></circle>
-    <circle cx="17" cy="17" r="1.6" fill="currentColor" stroke="none"></circle>
-    <path d="M17 0v6M17 28v6M0 17h6M28 17h6"></path>
-  </svg>
-</div>
+<!-- ★ The Earth's surface, as one equirectangular plate. js/globe.js samples this
+     per pixel to shade the sphere, so it must reach the canvas WITHOUT tainting
+     it: same-origin over http here, and rewritten to a data: URI by
+     trace/bundle.py for the two .dc.html files, which run off file://. Never
+     point this at another origin — getImageData would throw and the globe would
+     fall back to flat vector land for good. -->
+<img id="earth-plate" alt="" aria-hidden="true" decoding="async"
+     src="assets/earth-blue-marble-2048.jpg?v=5eb3c4cc">
 
 <header class="topbar">
   <a class="brand" href="#overture">
@@ -77,9 +77,9 @@
 
         <p class="lede rise" style="--d:.45s">Every circuit I can stand beside, and exactly when.</p>
         <div class="hero-body rise" style="--d:.56s">
-          <p id="hero-copy">Twenty-three circuits on the Nordic map, from Åsum to Vuollerim. Eight
-          dates that are actually mine. Each one measured to the metre — lap length, corner count,
-          the longest straight you can hold focus down — before I ever put a boot in the gravel.</p>
+          <p id="hero-copy">Eight dates I have actually booked, and every circuit I could book
+          instead. Measured before I get there — the lap, the corners, the longest straight — so
+          the only thing left to decide on the day is where to stand.</p>
         </div>
 
         <div class="readouts rise" style="--d:.66s" id="readouts"></div>
@@ -171,12 +171,6 @@
   <footer>
     <div class="wrap">
       <div class="foot-grid">
-        <div class="colophon">
-          <p style="margin:0 0 10px"><span class="mono mono--accent">COLOPHON</span></p>
-          <p style="margin:0">Field Atlas 2.0 — a reading room for the 2026 season. Geometry from
-          OpenStreetMap contributors and hand traces; land outline from Natural Earth. Facts
-          mastered in Field Atlas 1.x. Set throughout in Outfit.</p>
-        </div>
         <div class="sig mono" id="foot-sig">— END OF CATALOGUE</div>
       </div>
     </div>
@@ -197,6 +191,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=de1d34ae"></script>
+<script type="module" src="js/main.js?v=7dfa8047"></script>
 </body>
 </html>

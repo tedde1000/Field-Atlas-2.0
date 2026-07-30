@@ -182,6 +182,300 @@ function span(p0, p1, p2, p3, alpha) {
 
 const at = (pts, i) => pts[(i % pts.length + pts.length) % pts.length];
 
+/* ========================================================= CORNERS
+ * One corner finder for the whole page. §03's canvas figure had its own copy and
+ * the panel layouts had none, which is why the figure could call out four turns
+ * while the spec table beside it said fourteen.
+ *
+ * `curvature()` is heading change per node, smoothed over a window — the same
+ * signal trace/extract.py walks when it counts corners off the OSM centreline,
+ * only in artboard units instead of metres.
+ * ================================================================== */
+const TAU2 = Math.PI * 2;
+
+export function curvature(p, window = 3) {
+  const n = p.length, k = new Float32Array(n);
+  const head = (i) => {
+    const a = p[i % n], b = p[(i + 1) % n];
+    return Math.atan2(b[1] - a[1], b[0] - a[0]);
+  };
+  for (let i = 0; i < n; i++) {
+    let d = head(i + window) - head((i - window + n) % n);
+    while (d > Math.PI) d -= TAU2;
+    while (d < -Math.PI) d += TAU2;
+    k[i] = d;
+  }
+  return k;
+}
+
+/**
+ * Every maximal run of same-signed turn, in lap order, one entry per run.
+ *
+ * ★ The threshold is applied HERE and nowhere else, and the runs themselves do
+ * not depend on it — which is the property numberedCorners() below relies on.
+ */
+/* ★ HOW MUCH A RUN ACTUALLY TURNS, WHICH IS NOT THE SUM OF curvature().
+ *
+ * `curvature()` reports, at each node, the heading change across a ±3-node WINDOW.
+ * That is the right signal to find corners with — it is smooth and noise-robust —
+ * but consecutive nodes overlap by six segments, so adding it up over a run
+ * counts every segment about six times. The figure legend printed the result
+ * verbatim and claimed a 1371° corner at Gelleråsen, which is 3.8 revolutions.
+ *
+ * The true total is the sum of the per-SEGMENT heading deltas, each wrapped into
+ * (−π, π]. Summing deltas rather than differencing the endpoints matters: a
+ * hairpin turns more than 180°, and an endpoint difference wraps and reports the
+ * short way round.
+ */
+function trueTurn(pts, from, len) {
+  const n = pts.length;
+  const head = (i) => {
+    const a = pts[i % n], b = pts[(i + 1) % n];
+    return Math.atan2(b[1] - a[1], b[0] - a[0]);
+  };
+  let sum = 0, prev = head(from);
+  for (let j = 1; j <= len; j++) {
+    const h = head(from + j);
+    let d = h - prev;
+    while (d > Math.PI) d -= TAU2;
+    while (d < -Math.PI) d += TAU2;
+    sum += d;
+    prev = h;
+  }
+  return sum;
+}
+
+export function cornerRuns(pts, k, thresholdDeg = 4, dead = 0.012) {
+  const n = pts.length;
+  const sgn = new Int8Array(n);
+  for (let i = 0; i < n; i++) sgn[i] = k[i] > dead ? 1 : (k[i] < -dead ? -1 : 0);
+
+  /* Start walking from a sign CHANGE, so a corner that straddles index 0 is one
+     run and not two half-corners — index 0 is the start/finish line, and on a
+     circuit that line is often mid-straight but is sometimes not. */
+  let start = -1;
+  for (let i = 0; i < n; i++) {
+    if (sgn[i] !== sgn[(i - 1 + n) % n]) { start = i; break; }
+  }
+  if (start < 0) return [];                  // uniform curvature — a circle, no corners
+
+  const out = [];
+  for (let i = 0; i < n; ) {
+    const s = sgn[(start + i) % n];
+    let len = 1;
+    while (i + len < n && sgn[(start + i + len) % n] === s) len++;
+    if (s !== 0) {
+      let peak = 0, peakAt = (start + i) % n;
+      for (let j = 0; j < len; j++) {
+        const idx = (start + i + j) % n;
+        if (Math.abs(k[idx]) > Math.abs(peak)) { peak = k[idx]; peakAt = idx; }
+      }
+      const from = (start + i) % n;
+      const turn = trueTurn(pts, from, len);   // real degrees — see trueTurn()
+      if (Math.abs(turn) * 180 / Math.PI >= thresholdDeg) {
+        out.push({
+          i: peakAt,                         // sharpest node — where a label points
+          at: (start + i + (len >> 1)) % n,  // middle of the run
+          from, len,
+          turn,                              // signed total, radians
+          peak: Math.abs(peak),
+        });
+      }
+    }
+    i += len;
+  }
+  return out.sort((a, b) => a.i - b.i);       // lap order, i.e. from start/finish
+}
+
+/**
+ * The corners to NUMBER on a drawn layout — exactly `target` of them when the
+ * data knows how many there are.
+ *
+ * ★ WHY THIS IS NOT JUST cornerRuns() WITH A TUNED THRESHOLD.
+ *
+ * `track.corners` is measured by trace/extract.py off the OSM centreline,
+ * resampled to even 8-metre steps: that number is the authority and it is
+ * printed in the spec table two inches from the drawing. The drawing is a
+ * *different representation* of the same circuit — real Béziers on a 500x300
+ * artboard — so walking it for heading change gives a similar but not identical
+ * count, and a layout numbered T1…T16 beside a table reading "CORNERS 14" is
+ * exactly the kind of quiet disagreement this page is supposed to not have.
+ *
+ * Since the runs are threshold-independent, the honest reconciliation is to rank
+ * every run by how much it actually turns and keep the `target` sharpest, then
+ * put them back in lap order. The count always matches the table, and which
+ * turns got numbered is decided by the geometry rather than by a magic constant.
+ */
+/* ★ SPLITTING A RUN THAT IS REALLY TWO CORNERS.
+ *
+ * A run is a stretch of same-signed turn, so two corners the same way round with
+ * only a breath between them — a double apex, or Gelleråsen's Esset — arrive as
+ * ONE run. Loosening the deadband does not separate them; it makes it worse, which
+ * is the trap the first version of numberedCorners() fell into. A smaller deadband
+ * means fewer nodes read as straight, so runs get LONGER and merge more, and the
+ * pool shrank exactly when it needed to grow.
+ *
+ * What actually separates them is the shape of the curvature inside the run: two
+ * peaks with a dip between them. So cut at the deepest interior minima of |k| —
+ * which is where a driver releases and re-applies — and take one number per piece.
+ * Nothing is invented: a cut only happens where the drawing itself eases off.
+ */
+function splitRun(pts, k, run, pieces) {
+  const n = pts.length;
+  if (pieces < 2 || run.len < 8) return [run];
+  const guard = Math.max(2, Math.floor(run.len * 0.18));   // no slivers at either end
+  const dips = [];
+  for (let j = guard; j < run.len - guard; j++) {
+    const a = Math.abs(k[(run.from + j - 1) % n]);
+    const b = Math.abs(k[(run.from + j) % n]);
+    const c = Math.abs(k[(run.from + j + 1) % n]);
+    if (b <= a && b <= c) dips.push({ j, v: b });
+  }
+  if (!dips.length) return [run];
+  const cuts = dips.sort((a, b) => a.v - b.v).slice(0, pieces - 1)
+                   .map(d => d.j).sort((a, b) => a - b);
+
+  const out = [];
+  let at = 0;
+  for (const cut of [...cuts, run.len]) {
+    const len = cut - at;
+    if (len < 2) continue;
+    const from = (run.from + at) % n;
+    let peak = 0, peakAt = from;
+    for (let j = 0; j < len; j++) {
+      const idx = (from + j) % n;
+      if (Math.abs(k[idx]) > Math.abs(peak)) { peak = k[idx]; peakAt = idx; }
+    }
+    out.push({ i: peakAt, at: (from + (len >> 1)) % n, from, len,
+               turn: trueTurn(pts, from, len), peak: Math.abs(peak) });
+    at = cut;
+  }
+  return out.length ? out : [run];
+}
+
+export function numberedCorners(pts, k, target) {
+  const n = pts.length;
+  if (!target) return cornerRuns(pts, k, 4);
+
+  let pool = cornerRuns(pts, k, 3);
+
+  /* Short of the measured count? Split the runs that turn the most, biggest first,
+     one extra piece at a time — a 180° run is far more likely to be two corners
+     than a 40° one. Stops as soon as the pool reaches the target, or as soon as
+     nothing will split any further. */
+  let guardRounds = target * 2;
+  while (pool.length < target && guardRounds-- > 0) {
+    const order = [...pool].sort((a, b) => Math.abs(b.turn) - Math.abs(a.turn));
+    let progressed = false;
+    for (const run of order) {
+      const parts = splitRun(pts, k, run, 2);
+      if (parts.length < 2) continue;
+      pool = pool.filter(r => r !== run).concat(parts);
+      progressed = true;
+      break;
+    }
+    if (!progressed) break;
+  }
+
+  if (pool.length <= target) return pool.sort((a, b) => a.i - b.i);
+
+  /* More candidates than the data counts: keep the sharpest, but never two within
+     3.5% of the lap — two numbers on top of each other on the drawing costs a real
+     turn elsewhere its number. */
+  const sep = Math.max(3, Math.floor(n * 0.035));
+  const kept = [];
+  for (const c of [...pool].sort((a, b) => Math.abs(b.turn) - Math.abs(a.turn))) {
+    if (kept.length >= target) break;
+    if (kept.every(o => {
+      const d = Math.abs(o.i - c.i);
+      return Math.min(d, n - d) >= sep;
+    })) kept.push(c);
+  }
+  return kept.sort((a, b) => a.i - b.i);
+}
+
+/* ==================================================== THE RACING LINE
+ * ★ A CENTRELINE IS NOT A RACING LINE, and §03 used to show the centreline.
+ *
+ * Theodor: "take the line and then make it a racing line — make it go wide and
+ * then for the apex in the corners." What the figure drew was the traced
+ * centreline with the particles scattered either side of it by a random constant,
+ * so the flow ran down the middle of the road forever and the corners looked
+ * like the straights with more bend.
+ *
+ * This solves for the line a driver would actually take, inside a corridor of
+ * ±`halfWidth` about the centreline. The racing line is written as one lateral
+ * offset per node,
+ *
+ *     P(i) = C(i) + d(i) · n(i)      with  d(i) ∈ [−halfWidth, +halfWidth]
+ *
+ * and relaxed toward minimum curvature: each node steps toward the midpoint of
+ * its two neighbours, projected back onto its own normal so the point stays on
+ * its cross-section, then clamped to the track. Straights are already the
+ * midpoint of their neighbours so they do not move; corners pull inward until
+ * they hit the kerb. The equilibrium is wide in, apex, wide out — nobody has to
+ * hand-author that, it falls out of the geometry.
+ *
+ * ★ IT IS SOLVED COARSE-TO-FINE, AND IT HAS TO BE. The naive version relaxes
+ * only against immediate neighbours, and the Laplacian of a dense polyline is
+ * proportional to the SQUARE of the node spacing — at the 2.2-unit spacing the
+ * flattener emits, one sweep moves a node about a hundredth of a unit, so
+ * crossing a 13px corridor needs on the order of a thousand sweeps and the line
+ * visibly had not converged. Relaxing against neighbours ±k apart first, then
+ * halving k, moves the long wavelengths in a handful of sweeps and leaves the
+ * fine ones to the tail. Same answer, ~40x fewer sweeps.
+ * ================================================================== */
+export function racingLine(pts, halfWidth) {
+  const n = pts.length;
+  const nx = new Float64Array(n), ny = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = pts[(i - 1 + n) % n], b = pts[(i + 1) % n];
+    const tx = b[0] - a[0], ty = b[1] - a[1];
+    const L = Math.hypot(tx, ty) || 1;
+    nx[i] = -ty / L; ny[i] = tx / L;          // left of travel
+  }
+
+  const d = new Float64Array(n);
+  const w = Math.max(1e-6, halfWidth);
+  const clamp = (v) => (v > w ? w : (v < -w ? -w : v));
+
+  const scales = [];
+  for (let k = Math.max(1, Math.floor(n / 24)); k >= 1; k = Math.floor(k / 2)) scales.push(k);
+  if (scales[scales.length - 1] !== 1) scales.push(1);
+
+  for (const k of scales) {
+    const relax = k > 1 ? 0.55 : 0.32;
+    for (let it = 0; it < 34; it++) {
+      for (let i = 0; i < n; i++) {
+        const a = (i - k + n * 2) % n, b = (i + k) % n;
+        const ax = pts[a][0] + d[a] * nx[a], ay = pts[a][1] + d[a] * ny[a];
+        const bx = pts[b][0] + d[b] * nx[b], by = pts[b][1] + d[b] * ny[b];
+        const cx = pts[i][0] + d[i] * nx[i], cy = pts[i][1] + d[i] * ny[i];
+        const lx = (ax + bx) / 2 - cx, ly = (ay + by) / 2 - cy;
+        d[i] = clamp(d[i] + relax * (lx * nx[i] + ly * ny[i]));
+      }
+    }
+  }
+
+  /* A taut string apexes early and turns in kinks where it leaves the kerb. Three
+     passes of [1 2 1] on the offset move the line from minimum-LENGTH toward
+     minimum-CURVATURE — a later apex and a rounded release, which is what a lap
+     actually looks like. Re-clamped each pass, so nothing leaves the track. */
+  const tmp = new Float64Array(n);
+  for (let s = 0; s < 3; s++) {
+    tmp.set(d);
+    for (let i = 0; i < n; i++) {
+      d[i] = clamp((tmp[(i - 1 + n) % n] + 2 * tmp[i] + tmp[(i + 1) % n]) / 4);
+    }
+  }
+
+  const line = new Array(n);
+  for (let i = 0; i < n; i++) {
+    line[i] = [pts[i][0] + d[i] * nx[i], pts[i][1] + d[i] * ny[i]];
+  }
+  return { line, d, nx, ny, halfWidth: w };
+}
+
 /** the closed smooth loop as an SVG `d`, cubic Béziers through every point */
 export function loopPath(pts, alpha = 0.5) {
   const n = pts.length;

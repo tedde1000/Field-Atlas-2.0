@@ -2,22 +2,21 @@
  * scroll.js — everything that reacts to the scroll position.
  *
  * One rAF-throttled reader for the whole page: progress bar, hero dissolve,
- * globe parallax, chapter readout, reticle drift, starfield offset. Reveal is
- * separate and event-driven (IntersectionObserver), because it must survive a
- * page that is loaded already scrolled.
+ * globe parallax, chapter readout, starfield offset. Reveal is separate and
+ * event-driven (IntersectionObserver), because it must survive a page that is
+ * loaded already scrolled.
+ *
+ * ★ THERE IS NO RETICLE ANY MORE. A 34px crosshair used to drift toward a
+ * per-chapter sightline on its own rAF clock, wobbling on two out-of-phase sine
+ * waves so it never sat still. Theodor: "the arrow thing that's random that
+ * moves around when you scroll on the website — I don't wanna have that." It was
+ * decoration that read as a cursor the reader did not control, and it also meant
+ * this module held a requestAnimationFrame loop open for the life of the page to
+ * animate something purely ornamental. Both are gone: no #reticle in
+ * index.html, no rule in app.css, and no rAF here at all.
  * ======================================================================== */
 
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
-
-/* Where the reticle sits while you read each chapter, in viewport fractions.
-   Nothing functional — it is a sightline, and a still one looks dead. */
-const RETICLE = {
-  overture:  [0.50, 0.50],
-  mandate:   [0.38, 0.42],
-  season:    [0.62, 0.36],
-  anatomy:   [0.34, 0.58],
-  catalogue: [0.66, 0.46],
-};
 
 export function initReveal(root = document) {
   const targets = root.querySelectorAll('[data-reveal]');
@@ -34,9 +33,9 @@ export function initReveal(root = document) {
   return { observe: (el) => io.observe(el) };
 }
 
-export function initScroll({ hero, globeWrap, progress, reticle, chapterLabel, onChapter, onGlobeDim, onBusy, stars }) {
+export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter, onGlobeDim, onBusy, stars }) {
   const sections = [...document.querySelectorAll('section[data-chapter]')];
-  const state = { ret: [0.5, 0.5], retNow: [0.5, 0.5], chapter: null, motion: true, t: 0 };
+  const state = { chapter: null, motion: true };
   let ticking = false;
 
   /* ★ Is the reader moving right now? The canvases behind the page use this to
@@ -105,7 +104,6 @@ export function initScroll({ hero, globeWrap, progress, reticle, chapterLabel, o
         chapterLabel.innerHTML = `<b>${n}</b> / ${t}`;
         chapterLabel.style.opacity = '1';
       }, 190);
-      state.ret = RETICLE[cur.id] || [0.5, 0.5];
       onChapter && onChapter(cur.id);
     }
   }
@@ -115,27 +113,8 @@ export function initScroll({ hero, globeWrap, progress, reticle, chapterLabel, o
     if (!ticking) { ticking = true; requestAnimationFrame(read); }
   }
 
-  /* the reticle eases on its own clock so it keeps moving when the page is still */
-  let raf = 0;
-  function drift(now) {
-    raf = requestAnimationFrame(drift);
-    if (!reticle) return;
-    state.t = now / 1000;
-    const k = state.motion ? 0.045 : 1;
-    state.retNow[0] += (state.ret[0] - state.retNow[0]) * k;
-    state.retNow[1] += (state.ret[1] - state.retNow[1]) * k;
-    const wob = state.motion ? 1 : 0;
-    const x = state.retNow[0] * window.innerWidth + Math.sin(state.t * 0.34) * 9 * wob;
-    const yy = state.retNow[1] * window.innerHeight + Math.cos(state.t * 0.27) * 7 * wob;
-    reticle.style.transform = `translate3d(${x.toFixed(1)}px, ${yy.toFixed(1)}px, 0)`;
-  }
-
-  // the reticle is positioned from 0,0 once we drive it with transforms
-  if (reticle) { reticle.style.left = '0'; reticle.style.top = '0'; reticle.style.margin = '-17px 0 0 -17px'; }
-
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll);
-  raf = requestAnimationFrame(drift);
   read();
 
   return {
@@ -153,7 +132,6 @@ export function initScroll({ hero, globeWrap, progress, reticle, chapterLabel, o
       } else read();
     },
     destroy() {
-      cancelAnimationFrame(raf);
       clearTimeout(busyTimer);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onScroll);

@@ -90,13 +90,55 @@ def read(rel):
         return f.read()
 
 
+def read_bytes(rel):
+    with open(os.path.join(ROOT, rel), "rb") as f:
+        return f.read()
+
+
+MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml"}
+
+
 # ------------------------------------------------------------------ modules
-IMPORT_RE = re.compile(r"""(?m)^(\s*(?:import|export)\b[^'"\n]*?from\s*)(['"])([^'"]+)\2""")
+#
+# ★ THE IMPORT CLAUSE MAY SPAN LINES, AND THIS PATTERN USED TO ASSUME IT COULD NOT.
+#
+# It was `[^'"\n]*?`, i.e. no newline between `import` and `from`. The moment
+# js/main.js wrapped a long named-import list onto a second line, that specifier
+# stopped being found — so `./loop.js` was left verbatim inside a data: URL, where
+# there is no base to resolve a relative path against, and both .dc.html files
+# booted to a blank page with "Failed to resolve module specifier". Nothing failed
+# at bundle time; the bundler reported ten modules inlined and wrote the wreck.
+#
+# So: DOTALL, and `;` is excluded instead of the newline. An import clause cannot
+# contain a semicolon before its `from`, which is what keeps the non-greedy span
+# from running past the end of the statement it started in.
+#
+# The silent part is the real fault, and assert_resolved() below is the fix for it.
+IMPORT_RE = re.compile(r"""(?ms)^(\s*(?:import|export)\b[^'";]*?\bfrom\s*)(['"])([^'"]+)\2""")
+
+# any relative specifier still sitting in a module AFTER rewriting is a bundle that
+# will not boot — matched loosely on purpose, so a form the rewriter missed is
+# caught here rather than in a browser
+LEFTOVER_RE = re.compile(r"""from\s*(['"])(\.[^'"]*)\1""")
 
 
 def specifiers(src):
     """the relative specifiers a module imports, in source order"""
     return [m.group(3) for m in IMPORT_RE.finditer(src) if m.group(3).startswith(".")]
+
+
+def assert_resolved(rel, src):
+    """★ no relative import may survive into a data: URL — see IMPORT_RE above"""
+    left = LEFTOVER_RE.findall(src)
+    if left:
+        sys.exit(
+            f"bundle.py: {rel} still imports {', '.join(repr(s) for _, s in left)} "
+            f"relatively.\n"
+            f"  A data: URL has no base, so that specifier cannot resolve and the "
+            f".dc.html files\n  would boot to a blank page. IMPORT_RE did not match "
+            f"the import statement —\n  check its formatting, or widen the pattern."
+        )
 
 
 def resolve(base_rel, spec):
@@ -122,6 +164,7 @@ def data_url(rel, cache, stack=()):
             src,
         )
 
+    assert_resolved(rel, src)
     blob = base64.b64encode(src.encode("utf-8")).decode("ascii")
     cache[rel] = "data:text/javascript;base64," + blob
     return cache[rel]
@@ -154,6 +197,29 @@ def build(with_thumbnail):
 
     html = re.sub(r'<script type="module" src="([^"]+)"></script>', inline_js, html)
 
+    # <img src="assets/*.jpg">  ->  the same tag with a data: URI
+    #
+    # ★ THIS ONE IS LOAD-BEARING, NOT AN OPTIMISATION. js/globe.js draws
+    # #earth-plate into an offscreen canvas and calls getImageData on it to shade
+    # the sphere. A .dc.html file is opened off the filesystem, and a file:// image
+    # is an opaque origin — drawing it TAINTS the canvas, so getImageData throws a
+    # SecurityError and the globe permanently loses its surface. A data: URI has no
+    # origin to be cross to, so inlining is what makes the standalone globe work at
+    # all. If a future asset only needs to be *displayed*, it still belongs here;
+    # if it needs to be *read back*, it MUST be.
+    def inline_img(m):
+        tag, attr = m.group(0), m.group(1)
+        src = bare(attr)
+        if src.startswith(("http", "data:")):
+            return tag
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in MIME or not os.path.exists(os.path.join(ROOT, src)):
+            sys.exit(f"cannot inline <img src=\"{attr}\"> — no such file, or unknown type")
+        blob = base64.b64encode(read_bytes(src)).decode("ascii")
+        return tag.replace(attr, "data:%s;base64,%s" % (MIME[ext], blob), 1)
+
+    html = re.sub(r'<img\b[^>]*?\bsrc="([^"]+)"[^>]*>', inline_img, html)
+
     html = html.replace("<!DOCTYPE html>\n", "<!DOCTYPE html>\n" + GENERATED, 1)
     if with_thumbnail:
         html = html.replace("</body>", THUMBNAIL + "</body>", 1)
@@ -180,9 +246,10 @@ def stamp_index():
         attr, href = m.group(1), m.group(2).split("?")[0]
         if href.startswith("http") or not os.path.exists(os.path.join(ROOT, href)):
             return m.group(0)
-        h = hashlib.sha1(read(href).encode("utf-8")).hexdigest()[:8]
+        # hash the BYTES, not the decoded text — assets/*.jpg is not utf-8
+        h = hashlib.sha1(read_bytes(href)).hexdigest()[:8]
         return '%s="%s?v=%s"' % (attr, href, h)
-    out = re.sub(r'(href|src)="([^"]+\.(?:css|js))(?:\?[^"]*)?"', restamp, html)
+    out = re.sub(r'(href|src)="([^"]+\.(?:css|js|jpg|jpeg|png|webp))(?:\?[^"]*)?"', restamp, html)
     if out != html:
         with open(INDEX, "w", encoding="utf-8") as f:
             f.write(out)

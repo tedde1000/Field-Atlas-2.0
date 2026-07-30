@@ -1,23 +1,40 @@
 /* ===========================================================================
  * trace/verify.mjs — headless smoke test (CONVENTIONS §10).
  *
- * Serve first:  python3 -m http.server 8766 --directory "Field Atlas 2.0"
+ * Serve first:  python3 trace/serve.py
  * Then:         node trace/verify.mjs
  *
  * Selectors are ids and data-* attributes only — never rendered copy, so
  * rewording the page can never break the suite.
+ *
+ * The browser and puppeteer are found by trace/headless.mjs — see the note there.
+ * Neither path is hardcoded to one laptop any more; FA2_CHROME, FA2_PUPPETEER and
+ * FA2_BASE override the per-platform defaults.
  * ======================================================================== */
-import puppeteer from '/Users/theodor/node_modules/puppeteer-core/lib/esm/puppeteer/puppeteer-core.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { findChrome, loadPuppeteer, LAUNCH_ARGS } from './headless.mjs';
 
-const HERE = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
+const puppeteer = await loadPuppeteer(import.meta.url);
+
+/* fileURLToPath, not `new URL(...).pathname` — on Windows the latter yields
+   "/C:/Users/…", which path.join then treats as a rooted POSIX path and every
+   readFileSync below fails with ENOENT */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.FA2_BASE || 'http://localhost:8766/';
 
 /* read the generated data straight off disk so the page is checked against
    its own source of truth, not against numbers retyped into this file */
 const atlas = readFileSync(path.join(HERE, '..', 'data', 'atlas.js'), 'utf8');
-const grab = (name) => JSON.parse(atlas.match(new RegExp(`export const ${name} = ([\\s\\S]*?);\\n`))[1]);
+/* `;\r?\n`, not `;\n` — git checks this repo out with CRLF on Windows, and the
+   bare \n form matched nothing there, so the suite died on line one with a null
+   dereference before it had opened a browser */
+const grab = (name) => {
+  const m = atlas.match(new RegExp(`export const ${name} = ([\\s\\S]*?);\\r?\\n`));
+  if (!m) { console.error(`data/atlas.js has no "export const ${name}"`); process.exit(2); }
+  return JSON.parse(m[1]);
+};
 const VENUES = grab('VENUES'), TRACKS = grab('TRACKS');
 const EVENT_COUNT = VENUES.reduce((n, v) => n + v.events.length, 0);
 
@@ -28,9 +45,9 @@ const ok = (cond, name, extra = '') => {
 };
 
 const browser = await puppeteer.launch({
-  executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  executablePath: findChrome(),
   headless: true,
-  args: ['--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--hide-scrollbars'],
+  args: LAUNCH_ARGS,
 });
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -841,14 +858,370 @@ const filePage = await browser.newPage();
 filePage.__errs = [];
 filePage.on('pageerror', e => filePage.__errs.push(String(e)));
 await filePage.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
-await filePage.goto('file://' + encodeURI(path.join(FILE_ROOT, DOCS[0][1])), { waitUntil: 'networkidle0' });
+/* pathToFileURL, not 'file://' + encodeURI(...) — on Windows the manual form
+   produces file://C:%5CUsers%5C… and Chrome rejects it as ERR_INVALID_URL, which
+   killed the run right at the last check */
+await filePage.goto(pathToFileURL(path.join(FILE_ROOT, DOCS[0][1])).href, { waitUntil: 'networkidle0' });
 await sleep(2100);
 ok(JSON.stringify(await shapeOf(filePage)) === refShape,
   '★ the standalone-src builds the whole page straight off file://, no server',
   JSON.stringify(await shapeOf(filePage)));
 ok(filePage.__errs.filter(e => !/favicon|fonts\.g|net::/i.test(e)).length === 0,
   'file:// raises no page errors', filePage.__errs.join(' | '));
+
+/* -- 11d · ★ THE EARTH PLATE MUST SURVIVE THE FILE:// TRIP -----------------
+ * The single most breakable thing in this session's work. js/globe.js reads the
+ * plate back with getImageData, and a file:// <img> taints the canvas it is drawn
+ * into — so if trace/bundle.py ever stops inlining that src as a data: URI, the
+ * standalone globe silently loses its surface and falls back to bare coastlines.
+ * "Silently" is the problem: every other check in §11 passes either way. */
+ok(await filePage.evaluate(() =>
+    (document.getElementById('earth-plate')?.src || '').startsWith('data:image/')),
+  '★ the standalone inlines the Earth plate as a data: URI',
+  (await filePage.evaluate(() => (document.getElementById('earth-plate')?.src || '').slice(0, 40))));
+ok(await filePage.evaluate(() => document.getElementById('globe')?.dataset.plate) === 'ready',
+  '★ the globe reads the plate off file:// without tainting the canvas',
+  await filePage.evaluate(() => document.getElementById('globe')?.dataset.plate));
 await filePage.close();
+
+/* ===========================================================================
+ * 12 · session 5 — the racing line, numbered corners, the lit globe, and four
+ *      things that were taken off the page.
+ *
+ * Everything here is asserted through data-* and ids, per CONVENTIONS §5, so
+ * none of it breaks when the copy is reworded.
+ * ======================================================================== */
+console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
+{
+  const page = await open('', 1440, 900);
+
+  /* -- 12a · the four removals. Each one is a thing Theodor asked to be gone, and
+        a check that it stays gone is the only thing that stops it drifting back. */
+  ok(await page.evaluate(() => !document.getElementById('reticle')),
+    '★ the drifting reticle is gone from the document');
+  ok(await page.evaluate(() => !document.querySelector('.colophon')),
+    'the colophon block is gone from the footer');
+  ok(await page.evaluate(() => !document.querySelector('#foot-sig') === false),
+    'the footer signature is still there');
+
+  /* the distance readouts. Asserted on the KEY cells of the spec tables rather
+     than on a text search of the page, so a venue named "…Uppsala" cannot pass it
+     by accident, and the compass suffix is checked too — `183 KM WSW` in a
+     catalogue cell was the other place distance appeared. */
+  const dist = await page.evaluate(() => {
+    const keys = [...document.querySelectorAll('.spec .row .k')].map(k => k.textContent.trim());
+    const cells = [...document.querySelectorAll('.cat-cell .km')].map(k => k.textContent.trim());
+    return { keys, cells };
+  });
+  ok(!dist.keys.some(k => /UPPSALA|DISTANCE|FROM /.test(k)),
+    '★ no spec row reports distance from home any more', dist.keys.join(','));
+  ok(dist.keys.includes('NEAREST CITY'),
+    'the spec table names the nearest city instead', dist.keys.join(','));
+  /* the compass token must be preceded by WHITESPACE — `183 KM WSW` is the thing
+     being banned, and `20.4°E` is the coordinate that replaced it. Matching a bare
+     trailing letter flagged every coordinate on the page. */
+  ok(!dist.cells.some(c => /\d\s*KM\b/i.test(c) || /\s(N|S|E|W|NE|NW|SE|SW|NNE|ENE|ESE|SSE|SSW|WSW|WNW|NNW)$/.test(c)),
+    'no catalogue cell reports km and a bearing', dist.cells.slice(0, 4).join(' | '));
+  ok(dist.cells.length === TRACKS.length && dist.cells.every(c => /°[NS]\s.+°[EW]$/.test(c)),
+    'every catalogue cell carries a coordinate instead', dist.cells.slice(0, 3).join(' | '));
+  ok(!await page.evaluate(() => [...document.querySelectorAll('.bar .k')]
+       .some(b => b.textContent.trim() === 'REACH')),
+    'the REACH bar (km from Uppsala) is gone');
+
+  // the city printed has to be the city in the data, not a plausible-looking one
+  const cityRow = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#entries .entry')].map(e => {
+      const r = [...e.querySelectorAll('.spec .row')]
+        .find(x => x.querySelector('.k')?.textContent.trim() === 'NEAREST CITY');
+      return { key: e.dataset.key, city: r?.querySelector('.v')?.textContent.trim() || null };
+    });
+    return rows;
+  });
+  const cityOf = (key) => VENUES.find(v => v.id === key.split(':')[0])?.city;
+  ok(cityRow.length > 0 && cityRow.every(r => r.city === cityOf(r.key)),
+    'every NEAREST CITY equals the city in data/atlas.js',
+    JSON.stringify(cityRow.filter(r => r.city !== cityOf(r.key))));
+
+  /* -- 12b · ★ §03 DRAWS A RACING LINE, NOT THE CENTRELINE.
+   *
+   * The section had been captioned "RACING LINE" since session 1 while drawing the
+   * traced centreline with scattered particles. `data-swing` is the largest lateral
+   * offset the solver produced as a fraction of the corridor half-width: it is
+   * structurally 0 for a centreline and near 1 for a line that actually uses the
+   * road, so this check cannot be satisfied by the old code at any threshold. */
+  await page.evaluate(() => document.getElementById('anatomy').scrollIntoView());
+  await sleep(2200);
+  const fig = await page.evaluate(() => ({ ...document.getElementById('flow').dataset }));
+  ok(Number(fig.swing) > 0.55,
+    '★ the §03 racing line swings across most of the road', `swing=${fig.swing}`);
+  ok(Number(fig.swing) <= 1.001,
+    'and never leaves it', `swing=${fig.swing}`);
+
+  /* the figure numbers exactly as many corners as the measured data claims — see
+     numberedCorners() in js/loop.js for why that is the reconciliation */
+  const gel = [...VENUES, ...TRACKS].find(p => p.id === 'gellerasen');
+  ok(Number(fig.corners) === gel.track.corners,
+    '★ §03 numbers exactly the corner count in the data',
+    `figure=${fig.corners} data=${gel.track.corners}`);
+  ok(await page.evaluate(() => (document.getElementById('fig-legend').textContent.match(/T\d+/g) || []).length) === gel.track.corners,
+    'and the legend lists the same numbered turns');
+
+  /* -- 12c · numbered corners on a panel layout, and no fill inside the lap -- */
+  await page.evaluate(() => document.querySelector('.cat-cell').click());
+  await sleep(700);
+  const shape = await page.evaluate(() => {
+    const svg = document.querySelector('#panel .p-shape svg');
+    if (!svg) return null;
+    const line = svg.querySelector('path.line');
+    const road = svg.querySelector('path.road');
+    const cs = getComputedStyle(line);
+    return {
+      nums: [...svg.querySelectorAll('text.c-no')].map(t => t.textContent.trim()),
+      glow: !!svg.querySelector('path.glow'),
+      lineFill: cs.fill,
+      lineW: parseFloat(line.style.strokeWidth),
+      roadW: road ? parseFloat(road.style.strokeWidth) : 0,
+      sf: !!svg.querySelector('.c-sf'),
+    };
+  });
+  const firstTrack = TRACKS[0];
+  ok(shape && shape.nums.length > 0,
+    '★ the panel layout numbers its corners',
+    shape ? `${shape.nums.length} numbers` : 'no shape');
+  ok(shape && shape.nums.join(',') === Array.from({ length: shape.nums.length }, (_, i) => i + 1).join(','),
+    'the numbers run 1..n in lap order', shape ? shape.nums.join(',') : '');
+  ok(shape && shape.nums.length <= firstTrack.track.corners,
+    'and never more of them than the data counts',
+    shape ? `${shape.nums.length} vs ${firstTrack.track.corners}` : '');
+  ok(shape && shape.sf, 'the layout marks the start/finish line the numbering starts from');
+  ok(shape && !shape.glow,
+    '★ no path.glow — the accent fill inside the lap is gone');
+  ok(shape && (shape.lineFill === 'none' || shape.lineFill === 'rgba(0, 0, 0, 0)'),
+    'and the line itself does not fill either', shape ? shape.lineFill : '');
+  ok(shape && shape.roadW > shape.lineW && shape.lineW > 0,
+    '★ the track is wider than a wire, with a darker bed under the line',
+    shape ? `line=${shape.lineW} road=${shape.roadW}` : '');
+  await page.keyboard.press('Escape');
+  await sleep(400);
+
+  /* -- 12c′ · ★ A SHORT COUNT IS NEVER A SILENT ONE.
+   *
+   * The corner count in the spec table is measured off the OSM centreline at even
+   * 8-metre steps (trace/extract.py); the drawing is a different representation of
+   * the same circuit and is sometimes genuinely smoother. Measured over all 16
+   * catalogue circuits on the day this was written: 9 reconcile exactly, 6 resolve
+   * one to three fewer, and 1 has no measured count at all.
+   *
+   * So the invariant asserted here is NOT equality — it is that the page never
+   * quietly disagrees with itself. Every layout must either number the full
+   * measured count, or state in its caption how many it actually resolved.
+   * Twelve numerals under a table reading "CORNERS 14", with nothing to explain
+   * the gap, is exactly the kind of drift this suite exists to catch. */
+  const audit = [];
+  for (let i = 0; i < TRACKS.length; i++) {
+    await page.evaluate((n) => document.querySelectorAll('.cat-cell')[n].click(), i);
+    await sleep(240);
+    audit.push(await page.evaluate(() => {
+      const svg = document.querySelector('#panel .p-shape svg');
+      const rows = [...document.querySelectorAll('#panel .spec .row')];
+      const cr = rows.find(r => r.querySelector('.k')?.textContent.trim() === 'CORNERS');
+      return {
+        id: document.getElementById('panel-title')?.textContent.trim(),
+        drawn: svg ? svg.querySelectorAll('text.c-no').length : 0,
+        measured: cr ? Number(cr.querySelector('.v').textContent.trim()) : null,
+        cap: document.querySelector('#panel .p-cap')?.textContent.replace(/\s+/g, ' ').trim() || '',
+      };
+    }));
+    await page.keyboard.press('Escape');
+    await sleep(150);
+  }
+  const silent = audit.filter(a =>
+    a.measured != null && a.drawn > 0 && a.drawn < a.measured &&
+    !new RegExp(`${a.drawn}\\s+RESOLVED HERE`).test(a.cap));
+  ok(silent.length === 0,
+    '★ no layout under-numbers its corners without saying so in its caption',
+    silent.map(a => `${a.id}: ${a.drawn}/${a.measured} — "${a.cap}"`).join(' | '));
+  ok(audit.every(a => a.measured == null || a.drawn <= a.measured),
+    'no layout over-numbers its corners either',
+    audit.filter(a => a.measured != null && a.drawn > a.measured).map(a => a.id).join(','));
+  ok(audit.every(a => a.measured != null || a.drawn === 0),
+    'a circuit with no measured corner count is not numbered at all',
+    audit.filter(a => a.measured == null && a.drawn > 0).map(a => a.id).join(','));
+  const exact = audit.filter(a => a.measured != null && a.drawn === a.measured).length;
+  ok(exact >= Math.ceil(TRACKS.length / 2),
+    'at least half the catalogue reconciles exactly with the measured count',
+    `${exact}/${TRACKS.length}`);
+
+  /* -- 12c″ · ★ NO LAYOUT MAY EMIT A NON-FINITE NUMBER.
+   *
+   * Ten of the sixteen drawn layouts carry no `sw` in the data, so `+f.sw` was NaN
+   * and `stroke-width:NaN` silently fell back to SVG's default of 1 unit on a
+   * 500-unit artboard — which is most of why the panel layouts read as wire. A
+   * style attribute swallows NaN without a word; a geometry attribute does not. So
+   * assert BOTH: every stroke width is a real positive number, and no attribute
+   * anywhere in a layout is NaN. */
+  const nan = [];
+  for (let i = 0; i < TRACKS.length; i++) {
+    await page.evaluate((n) => document.querySelectorAll('.cat-cell')[n].click(), i);
+    await sleep(240);
+    const bad = await page.evaluate(() => {
+      const svg = document.querySelector('#panel .p-shape svg');
+      if (!svg) return null;
+      const out = [];
+      for (const el of svg.querySelectorAll('*')) {
+        for (const a of el.attributes) {
+          if (/NaN|Infinity|undefined/.test(a.value)) out.push(`${el.tagName}[${a.name}]`);
+        }
+        if (/NaN|Infinity|undefined/.test(el.getAttribute('style') || '')) out.push(`${el.tagName}[style]`);
+      }
+      const line = svg.querySelector('path.line');
+      const w = line ? parseFloat(line.style.strokeWidth) : NaN;
+      return { out, w, title: document.getElementById('panel-title')?.textContent.trim() };
+    });
+    if (bad && (bad.out.length || !(bad.w > 0))) nan.push(`${bad.title}: ${bad.out.join(',') || 'strokeWidth=' + bad.w}`);
+    /* ★ AND EVERY NUMERAL IS INSIDE THE FRAME.
+     *
+     * `.p-shape svg` is overflow:visible, so a numeral placed outside the viewBox
+     * does not clip — it hangs off the bordered box and looks like a mistake, which
+     * is exactly what happened while shapeFrame() ignored `pad` for artwork
+     * circuits. Asserted on the RENDERED boxes, in the spirit of §10: where things
+     * actually land, not what the markup says. */
+    const spill = await page.evaluate(() => {
+      const svg = document.querySelector('#panel .p-shape svg');
+      if (!svg) return [];
+      const box = svg.getBoundingClientRect();
+      const out = [];
+      for (const t of svg.querySelectorAll('text.c-no')) {
+        const r = t.getBoundingClientRect();
+        if (r.width === 0) continue;
+        if (r.left < box.left - 1 || r.right > box.right + 1 ||
+            r.top < box.top - 1 || r.bottom > box.bottom + 1) out.push(t.textContent.trim());
+      }
+      return out;
+    });
+    if (spill.length) nan.push(`${bad?.title}: numbers outside the frame — ${spill.join(',')}`);
+    await page.keyboard.press('Escape');
+    await sleep(150);
+  }
+  ok(nan.length === 0,
+    '★ no layout emits a NaN attribute, a missing stroke width, or a numeral outside its frame',
+    nan.join(' | '));
+
+  /* -- 12d · ★ THE SUN IS FIXED IN WORLD SPACE.
+   *
+   * This is the check for "when the earth rotates, the light isn't gonna change
+   * only at the earth, because there's light coming from a specific point." The
+   * old shading was a screen-space gradient, so it moved with the camera by
+   * construction and the terminator never crossed a coastline. The assertion is
+   * therefore comparative: over a window in which the camera turns, the subsolar
+   * point must NOT turn with it. The sun does move — 15°/hour — so the bound is on
+   * how much, not on whether. */
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await sleep(1200);
+  const g0 = await page.evaluate(() => ({ ...document.getElementById('globe').dataset }));
+  ok(g0.plate === 'ready',
+    '★ the globe decoded the Blue Marble plate over http', `plate=${g0.plate}`);
+  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 420,
+    'the surface raster stays inside its cap', `raster=${g0.raster}`);
+
+  /* ★ The camera is MOVED, not waited on.
+   *
+   * The first version of this check sat at the hero for 2.6 s and asserted the idle
+   * drift had carried the camera past half a degree. It had not, and the page was
+   * not at fault: `dt` in globe.js is clamped to 0.05 s so a stalled tab cannot
+   * teleport the planet, and headless swiftshader schedules rAF at about 3 Hz — so
+   * the 0.9°/s drift runs at 0.15°/s under the test and the window was six times
+   * too short. Rather than tune a sleep against a software rasteriser, scroll into
+   * §02: that fires a deliberate lookAt at the venue (lat − 22, its longitude),
+   * which is an 8° swing and does not depend on the frame rate to happen. */
+  await page.evaluate(() => {
+    const e = document.querySelector('#entries .entry');
+    window.scrollTo(0, window.scrollY + e.getBoundingClientRect().top - 80);
+  });
+  await sleep(2600);
+  const g1 = await page.evaluate(() => ({ ...document.getElementById('globe').dataset }));
+  const camMoved = Math.hypot(Number(g1.lon) - Number(g0.lon), Number(g1.lat) - Number(g0.lat));
+  const sunMoved = Math.hypot(Number(g1.sunLon) - Number(g0.sunLon), Number(g1.sunLat) - Number(g0.sunLat));
+  ok(camMoved > 2, 'the camera actually swung across the window', `${camMoved.toFixed(2)}°`);
+  ok(sunMoved < 0.2 && sunMoved < camMoved / 5,
+    '★ the sun does not turn with the camera — the light is fixed in world space',
+    `camera ${camMoved.toFixed(2)}° vs sun ${sunMoved.toFixed(3)}°`);
+  // and it is the real sun, not a constant: ±23.44° is the whole range of declination
+  ok(Math.abs(Number(g1.sunLat)) <= 23.5,
+    'the subsolar latitude is a physically possible declination', `${g1.sunLat}°`);
+  /* the sun is not FROZEN either — 15°/hour is 0.0042°/s, so over the ~4 s this
+     section has been running it must have moved, just not with the camera */
+  ok(sunMoved > 0, 'and it is a live sun, not a baked-in constant', `${sunMoved.toFixed(4)}°`);
+
+  ok(page.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'session-5 changes raise no page errors', page.__errs.join(' | '));
+  await page.close();
+}
+
+/* -- 12f · ★ THE ANGLES IN §03'S LEGEND ARE REAL DEGREES.
+ *
+ * They were not. `curvature()` reports heading change over a ±3-node window, so
+ * adding it up over a run counts every segment about six times — and the legend
+ * printed the sum verbatim, claiming a 1371° corner at Gelleråsen. The turn is now
+ * the sum of per-segment heading deltas, each wrapped into (−π, π].
+ *
+ * The check is the closed-loop invariant, run against js/loop.js directly rather
+ * than through the page: the signed per-segment turns around any closed lap must
+ * total exactly the drawing's winding number × 360°. That is a hard geometric
+ * identity, so it catches a re-inflation by any factor at all — a 6x error shows up
+ * as 2160° and cannot hide. */
+{
+  const loop = await import(pathToFileURL(path.join(HERE, '..', 'js', 'loop.js')).href);
+  const TAUd = Math.PI * 2;
+  const totalTurn = (pts) => {
+    const n = pts.length;
+    const head = (i) => {
+      const a = pts[i % n], b = pts[(i + 1) % n];
+      return Math.atan2(b[1] - a[1], b[0] - a[0]);
+    };
+    let sum = 0, prev = head(0);
+    for (let j = 1; j <= n; j++) {
+      const h = head(j); let d = h - prev;
+      while (d > Math.PI) d -= TAUd;
+      while (d < -Math.PI) d += TAUd;
+      sum += d; prev = h;
+    }
+    return sum * 180 / Math.PI;
+  };
+
+  const probes = ['gellerasen', 'rasbo'].map(id => [...VENUES, ...TRACKS].find(p => p.id === id));
+  for (const p of probes) {
+    const pts = p.svg?.d ? loop.flattenPath(p.svg.d, 2.2) : loop.loopSample(p.track.path, 3.2);
+    const total = totalTurn(pts);
+    ok(Math.abs(Math.abs(total) - 360) < 1,
+      `${p.id}'s drawn lap closes at 360° — the turn summation is sound`, `${total.toFixed(1)}°`);
+
+    const marks = loop.numberedCorners(pts, loop.curvature(pts), p.track.corners);
+    const deg = marks.map(c => c.turn * 180 / Math.PI);
+    /* every numbered turn must be a plausible single turn, and their signed sum
+       must not exceed the lap's own winding — a windowed sum would blow both */
+    ok(deg.every(d => Math.abs(d) >= 2 && Math.abs(d) <= 360),
+      `${p.id}'s corner angles are all inside one revolution`,
+      deg.map(d => Math.round(d)).join(' '));
+    const signed = deg.reduce((a, b) => a + b, 0);
+    ok(Math.abs(signed) <= Math.abs(total) + 90,
+      `${p.id}'s corner turns do not exceed the lap's own winding`,
+      `corners ${signed.toFixed(0)}° vs lap ${total.toFixed(0)}°`);
+  }
+}
+
+/* -- 12e · the sources still say what they do ------------------------------- */
+{
+  const globe = readFileSync(path.join(HERE, '..', 'js', 'globe.js'), 'utf8');
+  const loop = readFileSync(path.join(HERE, '..', 'js', 'loop.js'), 'utf8');
+  ok(/function subsolar/.test(globe) && !/const SUN = \{/.test(globe),
+    'globe.js computes a subsolar point instead of carrying a screen-space SUN');
+  ok(/racingLine/.test(loop) && /minimum curvature/i.test(loop),
+    'loop.js still documents how the racing line is solved');
+  const css = readFileSync(path.join(HERE, '..', 'assets', 'app.css'), 'utf8');
+  ok(!/#reticle\s*\{/.test(css), 'app.css no longer styles a reticle');
+  ok(!/\.p-shape path\.glow/.test(css), 'app.css no longer fills the inside of a lap');
+}
 
 await browser.close();
 console.log(`\n${pass} passed, ${fail} failed\n`);

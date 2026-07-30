@@ -11,7 +11,8 @@ import { VENUES, TRACKS, HOME } from '../data/atlas.js';
 import { createStarfield } from './starfield.js';
 import { createGlobe } from './globe.js';
 import { createCircuitFigure } from './circuit.js';
-import { loopPath, loopLength, layoutPath, hasRadii, flattenPath } from './loop.js';
+import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
+         curvature, numberedCorners } from './loop.js';
 import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
 import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS } from './gear.js';
@@ -29,6 +30,14 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 
 const DISCIPLINE = { karting: 'KARTING', cup: 'CUP + KARTING', airshow: 'AIRSHOW' };
 const HUE = { karting: '--karting', cup: '--cup', airshow: '--airshow' };
+
+/* One decimal, for the places a coordinate has to fit in a 124px column. Built
+   from lat/lon rather than by truncating `coordLabel`, so it cannot go wrong if
+   trace/extract.py ever changes that string's format. Every venue in the atlas is
+   north and east, but the hemisphere is read off the sign anyway. */
+const shortCoord = (p) =>
+  `${Math.abs(p.lat).toFixed(1)}°${p.lat < 0 ? 'S' : 'N'} ` +
+  `${Math.abs(p.lon).toFixed(1)}°${p.lon < 0 ? 'W' : 'E'}`;
 
 /* ★ NEVER call scrollIntoView on anything inside .chips.
  * .chips is a sticky, horizontally scrollable bar. scrollIntoView walks EVERY
@@ -71,11 +80,11 @@ function scrollToEl(target, extra = 8) {
  * printed next to it.
  * ========================================================================= */
 const COPY = {
-  'rasbo:0':      { desc: `Season opener at the home circuit, {km} km up the road — {lap} metres and {corners} corners.` },
+  'rasbo:0':      { desc: `Season opener at the home circuit, and the one I know best — {lap} metres and {corners} corners.` },
   'halla:0':      { desc: `First MKR round of the year, and the tightest layout in the atlas: {corners} corners in {lap} metres.` },
   'enkoping:0':   { desc: `A club circuit with more room than it looks — {lap} metres and a {straight}-metre straight.` },
   'jarfalla:0':   { desc: `Stockholm Race Weekend, on the densest layout of the season: a corner every {perCorner} metres.` },
-  'linkoping:0':  { desc: `One Sunday, {km} km each way. The length is scaled from a hand trace, so read {lap} metres as approximate.` },
+  'linkoping:0':  { desc: `One Sunday, there and back. The length is scaled from a hand trace, so read {lap} metres as approximate.` },
   'gellerasen:0': { desc: `Three days of Kanonloppet on the only full-size circuit here — {lap} metres, cars rather than karts.` },
   'malmen:0':     { desc: `Not a circuit but an air base, for the Air Force's hundredth: two runways, the longer {lap} metres.` },
   'rasbo:1':      { desc: `The same {lap} metres as April, five months of light later — low sun all day by late September.` },
@@ -95,11 +104,15 @@ EVENTS.forEach((e, i) => { e.no = String(i + 1).padStart(2, '0'); });
 
 const nextEvent = () => EVENTS.find(e => e.end > Date.now()) || null;
 
-/* atlas-wide maxima, so every bar is scored against the same page */
+/* atlas-wide maxima, so every bar is scored against the same page.
+   ★ `km` is gone: nothing on the page reports distance from home any more — see
+   the note over placeRows(). `distanceKm`, `bearing` and `compass` are still in
+   data/atlas.js because trace/extract.py still computes them and the data module
+   is generated; they are simply not printed. */
 const ALL = [...VENUES, ...TRACKS];
 const MAX = {
   lap: Math.max(...ALL.map(v => v.track?.lengthM || 0)),
-  km: Math.max(...ALL.map(v => v.distanceKm || 0)),
+  straight: Math.max(...ALL.map(v => v.track?.straightM || 0)),
   density: Math.max(...ALL.map(v => (v.track?.corners && v.track?.lengthM)
     ? v.track.corners / (v.track.lengthM / 1000) : 0)),
 };
@@ -123,7 +136,6 @@ function fill(tpl, e) {
   const t = e.venue.track || {};
   const per = (t.corners && t.lengthM) ? Math.round(t.lengthM / t.corners) : '—';
   return tpl.replace(/\s+/g, ' ').trim().replace(/\{(\w+)\}/g, (_, k) => ({
-    km: e.venue.distanceKm,
     lap: t.lengthM != null ? nf(t.lengthM) : '—',
     corners: t.corners ?? '—',
     straight: t.straightM != null ? nf(t.straightM) : '—',
@@ -192,9 +204,47 @@ function circuitPoints(c) {
   return c.path;
 }
 
-/** viewBox + stroke weight for a circuit, from the artwork or from its bbox */
+/* ★ TEN OF THE SIXTEEN DRAWN LAYOUTS CARRY NO STROKE WEIGHT, AND THIS IS WHY THE
+ * PANEL LAYOUTS LOOKED LIKE WIRE.
+ *
+ * `VENUE_ART` in trace/extract.py records a measured `sw` for the six circuit
+ * venues (2.9–3.48 on their artboards). The ten competition-track SVGs out of
+ * `source/uploads` do not carry one at all — they are drawn on a plain 500x300
+ * artboard and 1.x styled them from CSS. So `+c.art.sw` was NaN for all ten, and
+ * `stroke-width:NaN` is not an error in CSS, it is simply ignored: those laps fell
+ * back to SVG's default stroke-width of 1 unit on a 500-unit artboard, i.e. a
+ * hairline, while the six venues rendered at their proper weight. That is the
+ * "make the track layout itself a bit wider" complaint, at least half of it, and
+ * it was a missing-data fallback rather than a styling choice.
+ *
+ * The fallback now matches how frame() derives a weight for a traced path — the
+ * long side over 150 — which on a 500x300 artboard gives 3.33, right in the middle
+ * of the range the six measured ones actually use.
+ *
+ * ★ It also returns a NUMBER, always. Every caller multiplies this, and a NaN
+ * propagating into an SVG attribute is the one failure mode that produces no
+ * console error in a style attribute and a flood of them in a geometry attribute.
+ */
 function shapeFrame(c, pad) {
-  if (c.kind === 'art') return { vb: c.art.vb, sw: c.art.sw };
+  if (c.kind === 'art') {
+    const b = String(c.art.vb || '0 0 500 300').trim().split(/\s+/).map(Number);
+    const [x, y, w, h] = [b[0] || 0, b[1] || 0, b[2] || 500, b[3] || 300];
+    const long = Math.max(w, h);
+    const sw = Number(c.art.sw);
+    /* ★ The artwork's own viewBox is exactly its bounding box, so anything drawn
+     * OUTSIDE the lap — which is where every corner number goes — lands outside the
+     * frame. `.p-shape svg` is overflow:visible, so they did not clip, they simply
+     * hung off the bordered box: 3 above it, 1 below it, 12 and 14 out to the right.
+     *
+     * `pad` defaults to 0 here rather than to frame()'s 0.07, so the §02 thumbnails
+     * — which call this with no argument and carry no numbers — render at exactly
+     * the size they always did. Only bigLayout() asks for room. */
+    const m = long * (pad || 0);
+    return {
+      vb: `${(x - m).toFixed(1)} ${(y - m).toFixed(1)} ${(w + m * 2).toFixed(1)} ${(h + m * 2).toFixed(1)}`,
+      sw: Number.isFinite(sw) && sw > 0 ? sw : long / 150,
+    };
+  }
   return frame(c.path, pad);
 }
 
@@ -277,15 +327,22 @@ function renderChips() {
    quantity printed beside the bar so the index never has to be taken on trust. */
 function bars(e) {
   const t = e.venue.track || {};
+  const dur = ['DURATION', (e.days || 1) / 3 * 100, String(e.days || 1), 'd'];
   const out = [];
   if (t.corners && t.lengthM) {
     const dens = t.corners / (t.lengthM / 1000);
     out.push(['TECHNICAL', dens / MAX.density * 100, dens.toFixed(1), 'c/km']);
   } else {
-    out.push(['DURATION', (e.days || 1) / 3 * 100, String(e.days || 1), 'd']);
+    out.push(dur);
   }
   if (t.lengthM) out.push(['SCALE', t.lengthM / MAX.lap * 100, nf(t.lengthM), 'm']);
-  out.push(['REACH', e.venue.distanceKm / MAX.km * 100, String(Math.round(e.venue.distanceKm)), 'km']);
+  /* ★ The third bar was REACH — km from Uppsala. Replaced rather than dropped,
+     because two bars read as a truncated set. The longest straight is the index
+     that belongs beside the other two: it is about the circuit, not the drive.
+     Malmen has neither a straight nor a corner count, so it falls back to
+     duration — and `out.includes(dur)` is what stops it printing that twice. */
+  if (t.straightM) out.push(['STRAIGHT', t.straightM / MAX.straight * 100, nf(t.straightM), 'm']);
+  else if (!out.includes(dur)) out.push(dur);
   return out;
 }
 
@@ -297,7 +354,7 @@ function specRows(e) {
     ['DISCIPLINE', DISCIPLINE[e.type] || e.type.toUpperCase()],
     ['CLUB', esc(v.club || v.city)],
     ['COORDINATES', esc(v.coordLabel)],
-    ['FROM UPPSALA', `${v.distanceKm}<u>km ${v.compass}</u>`],
+    ['NEAREST CITY', esc(v.city)],
   ];
   if (t.runway) {
     rows.push(['RUNWAYS', (t.runways || []).map(nf).join(' / ') + '<u>m</u>']);
@@ -334,8 +391,10 @@ function thumbSvg(place) {
      fractionally early, which nobody can see; coming up short is the visible
      failure, so err in that direction deliberately. */
   const len = Math.ceil(loopLength(flattenPath(d, 4)) * 1.04);
+  /* no `path.glow` under the line any more — the accent fill inside the lap is
+     what Theodor meant by "this inner yellow inside of the track". See .p-shape
+     in assets/app.css. */
   return `<svg viewBox="${f.vb}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <path class="glow" d="${d}"></path>
       <path class="line" d="${d}" style="--len:${len};stroke-width:${(+f.sw).toFixed(2)}"></path>
     </svg>`;
 }
@@ -417,9 +476,14 @@ function renderCatalogue() {
       shape = `<div class="shape"></div>`;
     }
     const m = t.track || {};
+    /* the top-right used to be `183 KM WSW` — distance and bearing from Uppsala.
+       It is the coordinate now, at one decimal because the cell is 160px wide at
+       the narrow breakpoint and the full four-decimal label from the data does not
+       fit without wrapping mid-coordinate. The nearest city keeps the line under
+       the name, and the panel prints the coordinate in full. See placeRows(). */
     c.innerHTML = `
       <div class="top mono"><span class="no">${String(i + 1).padStart(2, '0')}</span>
-        <span class="km num">${Math.round(t.distanceKm)} KM ${t.compass}</span></div>
+        <span class="km num">${shortCoord(t)}</span></div>
       ${shape}
       <h3>${esc(t.name)}</h3>
       <div class="where mono">${esc(t.city)}</div>
@@ -439,15 +503,168 @@ function renderCatalogue() {
 
 const TRACK_BY_ID = new Map([...VENUES, ...TRACKS].map(p => [p.id, p]));
 
+/* ============================================ NUMBERED CORNERS ON A LAYOUT
+ * ★ Theodor: "if you go into a circuit, for example, make the tracks have corner
+ * numbers." So a panel layout is now annotated: a dot on the apex-side of each
+ * turn, a short leader out of the corner, and the number at the end of it.
+ *
+ * The count is not negotiable — numberedCorners() in js/loop.js keeps exactly as
+ * many turns as `track.corners` claims, ranked by how much they actually turn, so
+ * T1…T14 beside a table reading "CORNERS 14" is always the same fourteen turns.
+ * Read the long note over that function for why it is done that way.
+ *
+ * Everything is sized off the artboard rather than in pixels, because the three
+ * geometry sources have three different viewBoxes — a 500x300 drawing and a
+ * 1000x640 hand trace would otherwise get numerals at wildly different sizes.
+ * ======================================================================== */
+/* The numbered turns for a circuit, and the points they sit on. Memoised because
+   bigLayout() and cornerCaption() both need it and a date panel draws the same
+   circuit twice — flattening a path and walking it for curvature is not free. */
+const CORNER_CACHE = new Map();
+function layoutCorners(c) {
+  const t = c.track || {};
+  if (t.runway || !t.corners) return { pts: null, marks: [] };
+  if (CORNER_CACHE.has(c.id)) return CORNER_CACHE.get(c.id);
+  const pts = circuitPoints(c);
+  const got = (!pts || pts.length < 12)
+    ? { pts: null, marks: [] }
+    : { pts, marks: numberedCorners(pts, curvature(pts), t.corners) };
+  CORNER_CACHE.set(c.id, got);
+  return got;
+}
+
+/** bounding box of a flattened path, in its own units */
+function bbox(pts) {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+    if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+  }
+  return { x0, y0, x1, y1, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+}
+
+/** how far outside the road a numeral reaches, in artboard units */
+function markReach(sw, fs) {
+  const lead = sw * 1.15 + fs * 0.28;            // clear of the road, not floating
+  return { lead, reach: lead + fs * 0.95 };
+}
+
+function cornerMarks(c, sw, fs) {
+  const { pts, marks } = layoutCorners(c);
+  if (!pts || !marks.length) return '';
+  /* Belt and braces after the shapeFrame() NaN: nothing non-finite may reach an
+     SVG geometry attribute. `d="MNaN NaN…"` and `r="NaN"` are parse errors Chrome
+     logs once per element, and 16 circuits' worth of them buried a real check. */
+  if (!Number.isFinite(sw) || sw <= 0 || !Number.isFinite(fs) || fs <= 0) return '';
+
+  const { lead, reach } = markReach(sw, fs);
+
+  // the centroid, so a leader can be aimed AWAY from the middle of the circuit as
+  // a fallback when a turn is too gentle for its own normal to be trustworthy
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p[0]; my += p[1]; }
+  mx /= pts.length; my /= pts.length;
+
+  const n = pts.length;
+  const out = [];
+  marks.forEach((m, idx) => {
+    const p = pts[m.i];
+    const a = pts[(m.i - 3 + n) % n], b = pts[(m.i + 3) % n];
+    const tx = b[0] - a[0], ty = b[1] - a[1];
+    const L = Math.hypot(tx, ty) || 1;
+    let ux = -ty / L, uy = tx / L;               // normal, +ve toward the inside
+    // point it OUTWARD: away from the turn, and away from the centroid if in doubt
+    const sign = Math.sign(m.turn) || (((p[0] - mx) * ux + (p[1] - my) * uy) > 0 ? -1 : 1);
+    ux *= -sign; uy *= -sign;
+
+    const r = (v) => v.toFixed(1);
+    out.push(
+      `<circle class="c-dot" cx="${r(p[0])}" cy="${r(p[1])}" r="${r(sw * 0.42)}"></circle>` +
+      `<path class="c-lead" d="M${r(p[0] + ux * sw * 0.7)} ${r(p[1] + uy * sw * 0.7)}` +
+      `L${r(p[0] + ux * lead)} ${r(p[1] + uy * lead)}" stroke-width="${r(sw * 0.16)}"></path>` +
+      `<text class="c-no" x="${r(p[0] + ux * reach)}" y="${r(p[1] + uy * reach)}" ` +
+      `font-size="${r(fs)}">${idx + 1}</text>`);
+  });
+
+  /* the start/finish line, struck across the road at the first node — the same
+     convention §03's canvas figure uses, so the numbering starts in the same
+     place in both */
+  const p0 = pts[0], p1 = pts[3 % n];
+  const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+  const LL = Math.hypot(dx, dy) || 1;
+  const gx = -dy / LL, gy = dx / LL;
+  const half = sw * 0.62;
+  const sf =
+    `<path class="c-sf" d="M${(p0[0] - gx * half).toFixed(1)} ${(p0[1] - gy * half).toFixed(1)}` +
+    `L${(p0[0] + gx * half).toFixed(1)} ${(p0[1] + gy * half).toFixed(1)}" ` +
+    `stroke-width="${(sw * 0.22).toFixed(1)}"></path>` +
+    `<text class="c-sf-t" x="${(p0[0] + gx * (half + fs * 0.8)).toFixed(1)}" ` +
+    `y="${(p0[1] + gy * (half + fs * 0.8)).toFixed(1)}" font-size="${(fs * 0.72).toFixed(1)}">S/F</text>`;
+
+  return `<g class="corners">${sf}${out.join('')}</g>`;
+}
+
+/** what the numbering on a layout means, said out loud under the drawing */
+function cornerCaption(place) {
+  const t = place.track || {};
+  if (t.runway) return `${(t.runways || []).length} RUNWAYS · NO CORNERS`;
+  if (!t.corners) return 'CORNERS NOT MEASURED';
+  const c = circuitFor(place);
+  const got = c ? layoutCorners(c).marks.length : 0;
+  /* ★ If the drawing resolves fewer turns than the centreline measurement found,
+     SAY SO rather than quietly numbering fewer. The count in the spec table is
+     measured off the OSM centreline at 8-metre steps; the artwork is a different
+     representation and can genuinely be smoother. Both numbers are true, and a
+     reader counting the numerals on the drawing deserves to know why they do not
+     reach fourteen. */
+  if (got && got < t.corners) return `${t.corners} CORNERS · ${got} RESOLVED HERE`;
+  return `${t.corners} CORNERS · NUMBERED FROM S/F`;
+}
+
 /** big version of the traced layout, for the top of a circuit panel */
 function bigLayout(place) {
   const c = circuitFor(place);
   if (!c) return `<div class="p-shape p-shape--none mono">NO TRACED GEOMETRY</div>`;
   const d = shapeD(c);
-  const f = shapeFrame(c, 0.1);
-  return `<div class="p-shape"><svg viewBox="${f.vb}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <path class="glow" d="${d}"></path>
-      <path class="line" d="${d}" style="stroke-width:${(+f.sw * 0.9).toFixed(2)}"></path>
+  /* ★ "Make the track layout itself a bit wider." It was `sw * 0.9`, i.e. a hair
+     under the weight the thumbnails use — and NaN for ten of the sixteen, see
+     shapeFrame(). The road is now a dark bed at 2.6x with the accent laid down the
+     middle of it at 1.9x, which reads as a track with a width rather than as a
+     wire, and there is no fill inside the lap at all. */
+  const sw = shapeFrame(c, 0).sw;
+  const road = sw * 2.6, line = sw * 1.9;
+
+  /* ★ THE BOX IS MEASURED OFF THE GEOMETRY, NOT OFF `art.vb`.
+   *
+   * Five of the drawn layouts carry a `transform` in the data — a translate/rotate
+   * pair — and `art.vb` is the bounding box of the artwork AFTER it. This renderer
+   * draws the raw `d` without that transform, so for Siljan, Borås, Piteå, Klippan
+   * and Åsum the path genuinely lies outside its own stated viewBox. Padding that
+   * viewBox therefore did not help: `.p-shape svg` is overflow:visible, so numbers
+   * 1 and 3 simply hung off the bordered box.
+   *
+   * Measuring the flattened points that ARE drawn makes the frame exact, and the
+   * margin is then the reach of a numeral rather than a guessed fraction. */
+  const { pts, marks } = layoutCorners(c);
+  let vb;
+  let fs = 0;
+  if (pts && pts.length > 8) {
+    const b = bbox(pts);
+    const long = Math.max(b.w, b.h);
+    fs = long / 15;
+    const m = marks.length
+      ? road / 2 + markReach(line, fs).reach + fs * 0.7
+      : road / 2 + long * 0.04;
+    vb = `${(b.x0 - m).toFixed(1)} ${(b.y0 - m).toFixed(1)} ` +
+         `${(b.w + m * 2).toFixed(1)} ${(b.h + m * 2).toFixed(1)}`;
+  } else {
+    vb = shapeFrame(c, 0.17).vb;
+  }
+
+  return `<div class="p-shape"><svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <path class="road" d="${d}" style="stroke-width:${road.toFixed(2)}"></path>
+      <path class="line" d="${d}" style="stroke-width:${line.toFixed(2)}"></path>
+      ${cornerMarks(c, line, fs)}
     </svg></div>`;
 }
 
@@ -455,12 +672,25 @@ const rowsHtml = (rows) => rows.map(([k, v, est]) =>
   `<div class="row"><span class="k mono">${k}</span><span class="dots"></span>` +
   `<span class="v num${est ? ' est' : ''}">${v}${est ? '<u>est.</u>' : ''}</span></div>`).join('');
 
+/* ★ WHERE A CIRCUIT IS, WITHOUT SAYING HOW FAR IT IS.
+ *
+ * Theodor: "how long distance it is from a place — you don't really need to have
+ * that. It's enough with saying where it is, like under coordinates. Say, like,
+ * closest city." So the FROM UPPSALA row (`{distanceKm} km {compass}`) is gone
+ * from both spec tables, the REACH bar with it, and the coordinates are followed
+ * by the nearest city instead. A distance is only meaningful from one particular
+ * driveway; a coordinate and a town are true for whoever is reading.
+ *
+ * `distanceKm`, `bearing` and `compass` remain in data/atlas.js — trace/extract.py
+ * still computes them and that file is generated, so removing them there is a
+ * data-pipeline change, not a page change. Nothing prints them now.
+ */
 /** the measured facts for any place, venue or reference circuit */
 function placeRows(p) {
   const t = p.track || {};
   const rows = [
     ['COORDINATES', esc(p.coordLabel)],
-    ['FROM UPPSALA', `${p.distanceKm}<u>km ${p.compass}</u>`],
+    ['NEAREST CITY', esc(p.city)],
   ];
   if (t.runway) rows.push(['RUNWAYS', (t.runways || []).map(nf).join(' / ') + '<u>m</u>']);
   else if (t.lengthM) {
@@ -587,6 +817,8 @@ function datePanel(key) {
         </section>
         ${hasCircuit ? `<section class="p-sec"><h3 class="mono">THE CIRCUIT</h3>
           ${bigLayout(v)}
+          <div class="p-cap mono"><span>${sourceOf(circuitFor(v))}</span>
+            <span>${cornerCaption(v)}</span></div>
           <a class="p-out mono" href="#circuit/${esc(v.id)}" data-route="circuit/${esc(v.id)}">
             OPEN CIRCUIT SHEET →</a></section>` : ''}
       </div>
@@ -610,7 +842,8 @@ function circuitPanel(id) {
     </div>
     <div class="p-grid">
       <div>${bigLayout(p)}
-        <div class="p-cap mono">${esc(p.name).toUpperCase()} · ${sourceOf(circuitFor(p))}</div></div>
+        <div class="p-cap mono"><span>${esc(p.name).toUpperCase()} · ${sourceOf(circuitFor(p))}</span>
+          <span>${cornerCaption(p)}</span></div></div>
       <div>
         <section class="p-sec"><h3 class="mono">MEASURED</h3>
           <div class="spec">${rowsHtml(placeRows(p))}</div>
@@ -652,13 +885,30 @@ function renderFigure(fig) {
     $('#fig-meta').textContent =
       `${t.lengthM ? nf(t.lengthM) + ' M' : '—'} · ${t.corners ?? '—'} CORNERS · INTEGRATING`;
     [...pick.children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === o.id)));
-    // give the canvas a beat to find its corners before reading them back
+    /* Give the canvas a beat to solve the line before reading its corners back.
+       ★ The legend states that the road width is exaggerated. It has to: the line
+       is solved inside a corridor 28px wide on screen, which at a 1 223 m lap is
+       roughly six times the real 10 m track — without that sentence the figure
+       looks like it is claiming a measurement it is not. */
     setTimeout(() => {
       const cs = fig.corners();
+      /* ★ The degrees are TOTAL HEADING CHANGE through the turn, and the legend has
+         to say so. They are not the corner's included angle and they are not
+         bounded by 180° — a long same-direction sweep genuinely turns further than
+         a hairpin. Verified against the closed-loop invariant: the signed turns
+         plus the gentle bends below the threshold sum to the drawing's winding,
+         360° at Gelleråsen and Rörken. (Before this session the same field was the
+         sum of a ±3-node windowed curvature, which counted every segment about six
+         times and once printed a 1371° corner.) */
+      const note = o.cornerNames?.length
+        ? 'NAMED CORNERS · FIELD ATLAS 1.x'
+        : 'TURNS RANKED FROM THE DRAWN LAYOUT';
       $('#fig-legend').innerHTML = cs.length
-        ? cs.map(c => `<span><b>${esc(c.label)}</b>${c.turn != null ? ` · ${c.turn}°` : ''}</span>`).join('')
-          + `<span style="color:var(--ink-4)">${o.cornerNames?.length ? 'NAMED CORNERS · FIELD ATLAS 1.x' : 'TURNS DETECTED FROM THE TRACE'}</span>`
-        : '';
+        ? cs.map(c => `<span><b>T${c.no}</b>${c.label ? ` ${esc(c.label)}` : ''}` +
+                      `${c.turn != null ? ` · ${c.turn}°` : ''}</span>`).join('')
+          + `<span style="color:var(--ink-4)">${note} · ° IS TOTAL HEADING CHANGE` +
+            ` · ROAD WIDTH EXAGGERATED</span>`
+        : `<span style="color:var(--ink-4)">NO CORNERS — ${esc(o.name.toUpperCase())} IS AN AIR BASE</span>`;
     }, 40);
   };
 
@@ -720,7 +970,6 @@ function boot() {
     hero: $('#hero'),
     globeWrap: $('#globe-wrap'),
     progress: $('#progress'),
-    reticle: $('#reticle'),
     chapterLabel: $('#chapter-label'),
     stars,
     onChapter(id) {
