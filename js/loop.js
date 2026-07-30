@@ -394,6 +394,137 @@ export function numberedCorners(pts, k, target) {
   return kept.sort((a, b) => a.i - b.i);
 }
 
+/* ============================================ WHAT KIND OF CORNER IS IT
+ * ★ THE SHAPES A DRIVER RECOGNISES, NAMED OFF THE GEOMETRY — AND ONLY THE ONES
+ * THE GEOMETRY CAN ACTUALLY SUPPORT.
+ *
+ * Theodor sent the textbook diagrams — classic racing line, double apex, hairpin,
+ * connecting/linked curves, increasing radius, decreasing radius — and said: "that
+ * is a definition of a racing line, then take that into factor when you make the
+ * lines in the anatomy."
+ *
+ * They are not six different algorithms. Every one is what minimum lap time
+ * produces given the corner's own radius profile and what follows it, which is why
+ * racingLine() is not told about any of this and does not need to be: the late
+ * apex falls out of the stopwatch, and so does the early one on an increasing
+ * radius. What the names are for is CHECKING. A solver that quietly returns a
+ * geometric apex on a decreasing-radius corner is wrong in a way no lap time will
+ * report, and before this the only way to find out was to squint at the picture.
+ *
+ * ★ THE FIRST VERSION OF THIS CLASSIFIED EVERY CORNER IN THE ATLAS AS EITHER A
+ * HAIRPIN OR A DOUBLE APEX, AND THE THRESHOLDS ARE WHY. Both are recorded here
+ * because both are easy mistakes to make again:
+ *
+ *   Total turn is not tightness. Gelleråsen's T6 turns 227°, which read as a
+ *   hairpin — but it does it over 11.5% of the lap. It is Esset, a long fast
+ *   complex, and the tightest thing on that circuit turns 137° in a fifth of the
+ *   distance. What makes a hairpin is RADIUS, so the test is radius off the peak
+ *   curvature in the run — and turn is kept only as a floor, because a 30° kink
+ *   of small radius is a kink and not a hairpin.
+ *
+ *   And radius has to be judged AGAINST ITS OWN CIRCUIT. An absolute threshold in
+ *   metres — 20 m was tried — calls every corner on every kart track a hairpin,
+ *   and it is not wrong to: a kart circuit really is 10–15 m radius almost all the
+ *   way round. Measured, that produced "hairpin ×14" at Rörken, which is true in
+ *   the same useless way as saying every hill in the Alps is steep. A hairpin is
+ *   the tightest thing HERE, so the threshold is this circuit's own lower
+ *   quartile. That also makes the classifier work unchanged on a Carrera Cup
+ *   circuit, where a hairpin is three times the radius of a kart one.
+ *
+ *   The interior curvature dip does not find double apexes. Measured across the
+ *   atlas the min/peak ratio inside a run sits at 0.1–0.4 for ordinary corners,
+ *   because a run tapers at both ends, and RISES toward 1 for the genuinely
+ *   constant-radius ones — Rörken's T12 and T13 read 0.64 and 0.84. The signal is
+ *   the opposite way round from the assumption, and separating a true double apex
+ *   from a long sweep needs more than this. So it is not claimed. A category that
+ *   cannot be measured honestly is worse than one that is missing, and
+ *   numberedCorners() already splits real double apexes into two numbered turns.
+ *
+ * Nothing here shapes the line. It describes it, so the description can be
+ * disagreed with.
+ *
+ *   hairpin      in this circuit's tightest quarter, and turning 80° or more.
+ *                The latest apex of them all.
+ *   decreasing   tightens on exit — apex late, or the exit is a passenger.
+ *   increasing   opens on exit. An early apex is legitimate here, and is the one
+ *                case where "late" would be the wrong answer.
+ *   linked       another corner within 2.5% of the lap. Whichever one feeds the
+ *                straight wins; the other is given away.
+ *   classic      none of the above. Out, in, out, apex past the middle.
+ *
+ * @param metresPerNode  lap length / node count. Without it the radius test
+ *                       cannot run and no corner is called a hairpin.
+ */
+export function cornerArchetypes(pts, k, corners, opts = {}) {
+  const n = pts.length;
+  if (!corners || !corners.length) return [];
+  const mpn = opts.metresPerNode || 0;
+  const link = Math.max(3, Math.round(n * 0.025));
+
+  /* mean |curvature| over a slice of the run. Thirds rather than endpoints: the
+     first and last node of a run are where it is easing in and out of the
+     straight, and reading the radius there reports the transition, not the
+     corner. */
+  const meanK = (from, len) => {
+    let s = 0;
+    for (let j = 0; j < len; j++) s += Math.abs(k[(from + j) % n]);
+    return len ? s / len : 0;
+  };
+
+  /* curvature() is heading change over ±3 nodes, so |k| = 6 · ds / R and the
+     radius in metres is 6 · metresPerNode / |k| */
+  const radiusOf = (c) => {
+    let peak = 0;
+    for (let j = 0; j < c.len; j++) peak = Math.max(peak, Math.abs(k[(c.from + j) % n]));
+    return (mpn && peak > 1e-9) ? (6 * mpn) / peak : Infinity;
+  };
+
+  /* this circuit's own lower quartile of corner radius — see the note above for
+     why a threshold in metres cannot be shared between a kart track and a
+     full-size one */
+  const radii = corners.map(radiusOf);
+  const sorted = [...radii].filter(Number.isFinite).sort((a, b) => a - b);
+  const tight = sorted.length ? sorted[Math.floor((sorted.length - 1) * 0.25)] : 0;
+
+  return corners.map((c, idx) => {
+    const deg = Math.abs(c.turn) * 180 / Math.PI;
+    const radius = radii[idx];
+
+    const third = Math.max(1, Math.floor(c.len / 3));
+    const kIn = meanK(c.from, third);
+    const kOut = meanK((c.from + c.len - third + n) % n, third);
+    const trend = kIn > 1e-9 ? kOut / kIn : 1;      // > 1 means tightening on exit
+
+    let gap = Infinity;
+    if (corners.length > 1) {
+      const next = corners[(idx + 1) % corners.length];
+      gap = (next.from - ((c.from + c.len) % n) + n) % n;
+    }
+
+    /* A run under 20° or shorter than a dozen nodes is a bend, not a corner, and
+       its entry/exit thirds are too short for `trend` to mean anything —
+       Gelleråsen's T7 is 10° over 8 nodes and reported a trend of 6.2. */
+    const slight = deg < 20 || c.len < 12;
+
+    let kind;
+    if (radius <= tight && deg >= 80) kind = 'hairpin';
+    else if (!slight && trend >= 1.5) kind = 'decreasing';
+    else if (!slight && trend <= 0.6) kind = 'increasing';
+    else if (gap <= link) kind = 'linked';
+    else kind = 'classic';
+
+    /* where the apex ought to sit, as a fraction of the run — the expectation the
+       solved line is checked against, not an instruction to it */
+    const wants = kind === 'hairpin' ? 0.68
+      : kind === 'decreasing' ? 0.66
+      : kind === 'increasing' ? 0.40
+      : 0.58;
+
+    return { no: c.no ?? idx + 1, kind, deg: Math.round(deg),
+             radius: radius === Infinity ? null : Math.round(radius), trend, wants };
+  });
+}
+
 /* ================================================== EVEN SPACING, FIRST
  * ★ EVERY SOLVER BELOW ASSUMES THE NODES ARE EVENLY SPACED, AND NOTHING
  * UPSTREAM WAS GIVING THEM THAT.
@@ -592,16 +723,18 @@ function spanTime(v, dsMetres, from, len, n) {
  * cost — and the full lap is still checked once at the end, so a refinement that
  * somehow made the lap slower is thrown away rather than shipped.
  */
-/* ★ EVERY ONE OF THESE IS A FRACTION OF THE LAP, NOT A NUMBER OF NODES.
+/* ★ THE STENCIL IS A FRACTION OF THE LAP, NOT A NUMBER OF NODES.
  *
- * They were absolute — WINDOW 60, KGAP 3 — which quietly made all of them mean
- * something different the moment the resolution changed. A ±60-node window is
- * ±100 m at 1 400 nodes and ±54 m at 2 600, so raising the density silently
- * shrank the braking zone the time test could see; a 3-node curvature stencil
- * goes from 2.5 m to 1.3 m and starts reading sampling noise as corners. Tie them
- * to the lap and the solver behaves the same at any density, which is the only
- * way "add more measuring points" can be a safe thing to do. */
-const relWindow = (n) => Math.max(40, Math.round(n * 0.045));   // ±4.5% of the lap
+ * It was absolute — KGAP 3 — which quietly made it mean something different the
+ * moment the resolution changed: a 3-node stencil goes from 2.5 m at 1 400 nodes
+ * to 1.3 m at 2 600 and starts reading sampling noise as corners. Tied to the lap
+ * it behaves the same at any density, which is the only way "add more measuring
+ * points" can be a safe thing to do.
+ *
+ * ★ THE TIME WINDOW USED TO BE ONE OF THESE AND IT CANNOT BE. See the note over
+ * BACK/FWD inside racingLine() — a window that is a fraction of the LAP has no
+ * relationship to the distance over which a corner exit is actually paid back,
+ * and getting that wrong is what stopped the apexes coming out late. */
 const relGap = (n) => Math.max(3, Math.round(n / 460));         // curvature stencil
 
 export function racingLine(pts, halfWidth, opts = {}) {
@@ -658,7 +791,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
      * here that it would be on raw data). Then each node takes the most binding
      * bound within ±SPREAD, so one sharp node protects the run either side of it
      * instead of being undercut by its neighbours' looser limits. */
-    const g = 2, SPREAD = 4, MARGIN = 0.40;
+    const g = 2, SPREAD = 4, MARGIN = 0.58;
     const head = (i) => {
       const a = pts[i % n], b = pts[(i + 1) % n];
       return Math.atan2(b[1] - a[1], b[0] - a[0]);
@@ -686,6 +819,34 @@ export function racingLine(pts, halfWidth, opts = {}) {
         if (lo[j] > l) l = lo[j];
       }
       dHi[i] = h; dLo[i] = l;
+    }
+
+    /* ★ AND THE ENVELOPE ITSELF HAS TO BE SMOOTH, OR THE LINE INHERITS ITS STEPS.
+     *
+     * The running minimum above is a min-filter, and a min-filter over a spiky
+     * signal does not produce a gentle bound — it produces PLATEAUS with vertical
+     * steps at their edges, one step per local curvature spike. Wherever the line
+     * is pressed against the bound (which is most of a tight corner) it copies
+     * that shape exactly, and a step in the offset over one node is a corner in
+     * the drawn line. Measured: Åsum held a 123° joint through 24 passes of the
+     * de-kink below, because every pass was immediately re-clamped straight back
+     * onto the same step. That is not a kink the repair can reach; the repair was
+     * fighting the constraint.
+     *
+     * The physical bound is smooth — a corner's radius varies smoothly along it —
+     * so the steps are an artefact of the filter and not a fact about the track.
+     * Three passes of [1 2 1] take them out, and then the result is pulled back
+     * under the RAW per-node bound so the smoothing can never license an offset
+     * that would actually fold. The SPREAD margin is what gets relaxed, which is
+     * exactly what it was: a margin, not a limit. */
+    const sh = new Float64Array(n), sl = new Float64Array(n);
+    for (let pass = 0; pass < 3; pass++) {
+      sh.set(dHi); sl.set(dLo);
+      for (let i = 0; i < n; i++) {
+        const a = (i - 1 + n) % n, b = (i + 1) % n;
+        dHi[i] = Math.min(hi[i], (sh[a] + 2 * sh[i] + sh[b]) / 4);
+        dLo[i] = Math.max(lo[i], (sl[a] + 2 * sl[i] + sl[b]) / 4);
+      }
     }
   }
   const clampAt = (i, v) => (v > dHi[i] ? dHi[i] : (v < dLo[i] ? dLo[i] : v));
@@ -745,8 +906,35 @@ export function racingLine(pts, halfWidth, opts = {}) {
   let v = speedProfile(line, ds, car);
   const t0 = spanTime(v, ds, 0, n, n);                  // the whole lap, once
 
-  const WINDOW = relWindow(n), KGAP = relGap(n);
-  const SPAN = 2 * WINDOW + 1;
+  /* ★ THE WINDOW HAS TO BE LONGER THAN THE STRAIGHT, AND IT WAS NOT.
+   *
+   * Theodor, looking at Gelleråsen: "the lines is maybe a bit better, but it's
+   * still not racing lines. You're not supposed to take a racing line like that."
+   *
+   * He is right, and the fault is in this constant rather than anywhere in the
+   * geometry. The window was ±4.5% of the lap: at 2 600 nodes over 2 340 m that
+   * is ±105 metres. Gelleråsen's main straight is 360 metres. So when the search
+   * asked "is this corner better if I apex later", it measured 105 m of a 360 m
+   * answer and was blind to the rest — and the whole reason to give away entry
+   * speed is what happens over the LENGTH of the following straight. The
+   * objective could not see the thing the shape exists to buy, so it kept the
+   * geometric apex, every time, on every circuit.
+   *
+   * A window measured in lap-fractions is the wrong unit entirely. The distance
+   * that matters is a property of the CAR: how far it takes to brake, and how far
+   * it takes to accelerate. Both are v²/2a, and taken at vMax they bound the
+   * longest zone the vehicle can possibly have. Asymmetric, because they are very
+   * different numbers — a Carrera Cup car needs 283 m to reach 62 m/s and 133 m to
+   * stop from it — and the long one has to point FORWARD, which is exactly the
+   * side the old symmetric window was starving.
+   *
+   * Capped at 40% of the lap each way so the window can never wrap past itself on
+   * a short kart circuit, where the whole lap is shorter than a car's accel zone. */
+  const KGAP = relGap(n);
+  const cap = Math.floor(n * 0.40);
+  const BACK = Math.min(cap, Math.max(30, Math.round((car.vMax * car.vMax) / (2 * car.aBrake) / ds)));
+  const FWD = Math.min(cap, Math.max(40, Math.round((car.vMax * car.vMax) / (2 * car.aPower) / ds)));
+  const SPAN = BACK + FWD + 1;
   const vw = new Float64Array(SPAN);
   const dvB = 2 * car.aBrake * ds, dvP = 2 * car.aPower * ds;
 
@@ -761,7 +949,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
    */
   const localTime = (c) => {
     for (let s = 0; s < SPAN; s++) {
-      const i = (c - WINDOW + s + n * 2) % n;
+      const i = (c - BACK + s + n * 2) % n;
       const ia = (i - KGAP + n) % n, ie = (i + KGAP) % n;
       const ax = CX[ia] + d[ia] * nx[ia], ay = CY[ia] + d[ia] * ny[ia];
       const bx = CX[i] + d[i] * nx[i], by = CY[i] + d[i] * ny[i];
@@ -771,11 +959,25 @@ export function racingLine(pts, halfWidth, opts = {}) {
       const k = den > 1e-12 ? 2 * Math.abs(abx * aey - aby * aex) / den : 0;
       vw[s] = k > 1e-9 ? Math.min(car.vMax, Math.sqrt(car.aLat / k)) : car.vMax;
     }
-    // pin the ends to the full-lap answer, so the window cannot invent speed it
-    // could never have arrived with, or leave with
-    const v0 = v[(c - WINDOW + n * 2) % n], v1 = v[(c + WINDOW) % n];
+    /* ★ THE ARRIVAL SPEED IS PINNED. THE EXIT SPEED IS NOT, AND THAT IS THE
+     * SECOND HALF OF THE LATE-APEX FIX.
+     *
+     * Both ends used to be clamped to the current full-lap profile. Pinning the
+     * ENTRY is physics — the car cannot arrive at this stretch of road faster
+     * than the rest of the lap allows, so a candidate must not be credited with
+     * speed it could never have carried in.
+     *
+     * Pinning the EXIT was the opposite of physics. A later apex works by leaving
+     * the corner faster; capping the last node at the speed the CURRENT line
+     * happens to reach deletes precisely that gain at the boundary, so the search
+     * saw the cost of the slower entry and none of the benefit and rejected every
+     * late apex it tried. The window now runs the full acceleration distance
+     * instead (see FWD above), which means it ends either at vMax or inside the
+     * next corner's limit — and both of those are real caps that the profile
+     * below applies on its own. A cap the geometry imposes is a fact; a cap
+     * copied from the answer we are trying to improve is circular. */
+    const v0 = v[(c - BACK + n * 2) % n];
     if (vw[0] > v0) vw[0] = v0;
-    if (vw[SPAN - 1] > v1) vw[SPAN - 1] = v1;
     for (let s = SPAN - 2; s >= 0; s--) {
       const lim = Math.sqrt(vw[s + 1] * vw[s + 1] + dvB);
       if (vw[s] > lim) vw[s] = lim;
@@ -862,6 +1064,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
    * smoothing does: the next sweep then measures the lap time of the line that
    * will actually be drawn, and can spend its next move somewhere useful instead
    * of pushing again into a corner it is not allowed to have. */
+  let relieved = 0;                           // reported, so we can see it idle
   const relieve = () => {
     const floor = 0.25;                       // of the mean segment length
     for (let pass = 0; pass < 10; pass++) {
@@ -883,6 +1086,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
         const j = (i + 1) % n;
         d[i] *= 0.82; d[j] *= 0.82;
       }
+      relieved += hit;
       if (!hit) break;
     }
   };
@@ -928,6 +1132,65 @@ export function racingLine(pts, halfWidth, opts = {}) {
     }
   }
 
+  /* ★ AND THEN TAKE THE CORNERS OUT OF THE LINE ITSELF.
+   *
+   * Theodor: "the lines is maybe a bit better, but it's still not racing lines.
+   * You're not supposed to take a racing line like that."
+   *
+   * Measured across all 21 circuits, the sharpest JOINT in the drawn line — the
+   * angle between one segment and the next, on a polyline whose nodes are under a
+   * metre apart — was 132°. Uddevalla, Åsum and Kalmar were all past 60°. That is
+   * not a tight corner and it is not a late apex; at this node spacing it is a
+   * visible corner in the line, and no car has ever been driven round one. It is
+   * the single most obvious way the figure contradicted every diagram he sent.
+   *
+   * They come from the clamp. A trial bump is a raised cosine and is smooth right
+   * up until clampAt() puts a flat lid on it; a continuous curve with a
+   * discontinuous DERIVATIVE is exactly a kink. smooth() inside the descent is
+   * what has been holding this down, and it is the wrong tool: it is a low-pass
+   * filter over the WHOLE lap run after every sweep, so it erodes the apex — the
+   * one high-frequency feature that is actually wanted — everywhere, in order to
+   * fix a few dozen nodes. Turning it up smooths away the shape; turning it down
+   * (tried: one pass) leaves the kinks.
+   *
+   * So the kinks are dealt with where they are. Walk the drawn line, find the
+   * joints over a threshold, and apply [1 2 1] to those nodes and their immediate
+   * neighbours only. Local, convergent — averaging a node toward its neighbours
+   * can only reduce the angle at that node — and it leaves every part of the line
+   * that was already smooth exactly as the lap-time search left it.
+   *
+   * It runs after the descent rather than inside it, because unlike smooth() it
+   * is not shaping the search: it is a repair, on the line that ships, and the
+   * full-lap check below still gets the last word. */
+  const deKink = () => {
+    const LIMIT = Math.cos(11 * Math.PI / 180);   // joints past ~11° get eased
+    const hot = new Uint8Array(n);
+    for (let pass = 0; pass < 24; pass++) {
+      hot.fill(0);
+      let hits = 0;
+      for (let i = 0; i < n; i++) {
+        const h = (i - 1 + n) % n, j = (i + 1) % n;
+        const ax = CX[h] + d[h] * nx[h], ay = CY[h] + d[h] * ny[h];
+        const bx = CX[i] + d[i] * nx[i], by = CY[i] + d[i] * ny[i];
+        const cx = CX[j] + d[j] * nx[j], cy = CY[j] + d[j] * ny[j];
+        const ux = bx - ax, uy = by - ay, vx = cx - bx, vy = cy - by;
+        const m1 = Math.hypot(ux, uy), m2 = Math.hypot(vx, vy);
+        if (m1 < 1e-12 || m2 < 1e-12) { hot[i] = 1; hits++; continue; }
+        const cos = (ux * vx + uy * vy) / (m1 * m2);
+        if (cos < LIMIT) { hot[h] = hot[i] = hot[j] = 1; hits++; }
+      }
+      if (!hits) break;
+      relax.set(d);
+      for (let i = 0; i < n; i++) {
+        if (!hot[i]) continue;
+        d[i] = clampAt(i, (relax[(i - 1 + n) % n] + 2 * relax[i] + relax[(i + 1) % n]) / 4);
+      }
+    }
+  };
+  deKink();
+  line = build(d);
+  v = speedProfile(line, ds, car);
+
   /* ★ AND CHECK. Descent on a windowed objective is a heuristic — it is not
      guaranteed to improve the thing it is a proxy for. Measuring the whole lap
      once, against the line we started from, costs one profile and makes the whole
@@ -936,10 +1199,10 @@ export function racingLine(pts, halfWidth, opts = {}) {
   const t1 = spanTime(v, ds, 0, n, n);
   if (!(t1 < t0)) {
     return { line: build(geo), d: geo, nx, ny, halfWidth: w, geometric: true,
-             lap: t0, gain: 0 };
+             lap: t0, gain: 0, relieved, window: [BACK, FWD] };
   }
   return { line, d, nx, ny, halfWidth: w, geometric: false,
-           lap: t1, gain: (t0 - t1) };
+           lap: t1, gain: (t0 - t1), relieved, window: [BACK, FWD] };
 }
 
 /** the closed smooth loop as an SVG `d`, cubic Béziers through every point */

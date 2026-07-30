@@ -91,9 +91,16 @@ export function createPanel({ root, onRender, onAfterRender }) {
   }
 
   /* -------------------------------------------------------------- routing */
+  /* `date/…` and `circuit/…` name a thing; `gear` is a whole route on its own,
+     because there is only one kit. Hence the extra alternative rather than one
+     pattern with an optional tail — `gear/` with anything after it is not a
+     route and must keep falling through to hide().
+     ★ It is `gear` and not `kit` because `#kit` is already §05's element id, and
+     a hash cannot be both a panel route and an anchor: main.js's goHash() would
+     scroll the locked document to the section while the panel sat over it. */
   const routeOf = () => {
     const h = decodeURIComponent(location.hash.slice(1));
-    return /^(date|circuit)\/.+/.test(h) ? h : null;
+    return (/^(date|circuit)\/.+/.test(h) || h === 'gear') ? h : null;
   };
 
   /** bring the panel in line with whatever the URL currently says */

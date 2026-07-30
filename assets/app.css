@@ -5,7 +5,12 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; overflow-x: clip; }
-@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+/* ★ THE MOTION PILL IS THE ONLY AUTHORITY, so this keys off `body.no-motion` and
+   not off the media query. See the block at the end of the MOTION section.
+   `:has()` because `scroll-behavior` only governs the viewport when it is set on
+   the ROOT element — unlike `overflow`, it does not propagate up from <body>, so
+   `body.no-motion { scroll-behavior: auto }` would silently do nothing. */
+:root:has(body.no-motion) { scroll-behavior: auto; }
 
 body {
   margin: 0;
@@ -139,6 +144,27 @@ a { color: inherit; }
   transition: background .25s, box-shadow .25s;
 }
 .pill[aria-pressed='false']::before { background: var(--ink-4); box-shadow: none; }
+
+/* ★ ONE COLD VISIT'S WORTH OF "THIS IS A SWITCH, AND IT IS ON".
+ *
+ * Motion now boots on even for a reader whose OS asked for less of it — see the
+ * note over the pill in js/main.js. That override is defensible only if it is
+ * VISIBLE, so on the one load where 2.0 overrules the system preference the pill
+ * carries the accent until it is touched. It is not an alert and it does not
+ * queue behind anything; it is the control drawing attention to itself once.
+ * Cleared on the first click, whichever way that click goes. */
+.pill--flag {
+  position: relative;
+  border-color: var(--accent-dim); color: var(--ink);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* KIT is navigation, not a toggle: no state dot, and it keeps its label at every
+   width because it is the only way to the kit from anywhere but the page foot. */
+.pill--go { color: var(--ink); border-color: var(--hairline); gap: 6px; }
+.pill--go::before { display: none; }
+.pill--go:hover { border-color: var(--accent); color: var(--accent-text); }
+.pill--go svg { width: 12px; height: 12px; flex: none; }
 
 /* the two vertical rails */
 .rail {
@@ -658,7 +684,23 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
 /* ------------------------------------------------------------ gear list */
 .p-gear-sub { color: var(--ink-4); margin-bottom: 18px; }
 .p-cat { margin-bottom: 20px; }
-.p-cat-h { color: var(--ink-3); margin-bottom: 7px; }
+.p-cat-h {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  color: var(--ink-3); margin-bottom: 7px;
+}
+/* picked / total. Goes accent only when the category is complete, so a glance
+   down the panel reads as "these are done, that one is not". */
+.p-cat-h .n { flex: none; color: var(--ink-4); font-size: 9.5px; letter-spacing: .1em; }
+.p-cat-h .n.is-all { color: var(--accent); }
+
+/* things on the list that have to be booked before the weekend, not packed */
+.p-rental {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
+  margin: -2px 0 18px; padding: 10px 12px;
+  border: 1px solid var(--accent-dim); border-left-width: 2px;
+  font-size: 13.5px; color: var(--ink-2);
+}
+.p-rental b { color: var(--accent); font-size: 8.5px; letter-spacing: .14em; }
 .p-item {
   -webkit-appearance: none; appearance: none;
   display: flex; align-items: center; gap: 11px; width: 100%;
@@ -926,16 +968,132 @@ body.no-motion .p3d .p3d-plane { transition: none; }
 .p-src { margin-top: 14px; color: var(--ink-4); font-size: 9px; letter-spacing: .14em; }
 
 .p-dates { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+/* an <a> when it goes to an anchor, a <button> when it opens a panel — same
+   affordance either way, so the button has to shed its UA chrome */
 .p-out {
   display: inline-flex; align-items: center; gap: 8px;
   margin-top: 14px; padding: 10px 2px;
-  border-bottom: 1px solid var(--hairline);
+  border: 0; border-bottom: 1px solid var(--hairline);
+  background: none; font: inherit; cursor: pointer;
   color: var(--accent); text-decoration: none;
   transition: gap .3s var(--ease), border-color .3s var(--ease);
 }
 .p-out:hover { gap: 13px; border-bottom-color: var(--accent-dim); }
 .p-out:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
 .p-dates .p-out { width: 100%; margin-top: 0; }
+
+/* ========================================================= THE KIT EDITOR
+ * Rows in the kit panel. Deliberately built out of the vocabulary the date
+ * panel already uses — .p-cat groups, .p-cat-h headers, the same hairlines and
+ * the same 44px touch target — so the editable list reads as the same object as
+ * the packing list, which it is.
+ *
+ * ★ ONE ROW, TWO LINES ON A PHONE. The row is a grid rather than a flex line
+ * because five controls (name, category, owned/rental, quantity, delete) cannot
+ * share a 360px width and still be tappable. Under 560px the name takes the
+ * first line to itself and the four controls sit under it, which keeps every
+ * target at full size instead of shrinking all five to fit.
+ * ========================================================================= */
+.kit-open {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 18px; padding: 12px 18px;
+  border: 1px solid var(--hairline); background: none; color: var(--accent);
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase; cursor: pointer;
+  transition: border-color .25s var(--ease), gap .3s var(--ease);
+}
+.kit-open:hover { border-color: var(--accent-dim); gap: 13px; }
+.kit-open:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
+
+.kit-adopt {
+  margin-bottom: 22px; padding: 15px 16px;
+  border: 1px solid var(--hairline); background: var(--panel-soft, transparent);
+}
+.kit-adopt p { margin: 0 0 13px; font-size: 14px; color: var(--ink-2); }
+.kit-adopt b { color: var(--ink); font-weight: 600; }
+.kit-adopt-do { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.kit-btn {
+  min-height: 40px; padding: 9px 15px;
+  border: 1px solid var(--hairline); background: none; color: var(--ink-2);
+  font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; cursor: pointer;
+  transition: border-color .2s, color .2s;
+}
+.kit-btn:hover { border-color: var(--accent-dim); color: var(--ink); }
+.kit-btn--go { border-color: var(--accent-dim); color: var(--accent); }
+.kit-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+.kit-add {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px; align-items: center; margin-bottom: 24px;
+  padding-bottom: 18px; border-bottom: 1px solid var(--hairline);
+}
+.kit-in {
+  min-height: 40px; padding: 9px 11px; min-width: 0;
+  border: 1px solid var(--hairline); background: transparent; color: var(--ink);
+  font: inherit; font-size: 14px;
+}
+.kit-in:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.kit-in--cat {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+/* the native menu is the OS's, so it needs a real background to be readable */
+.kit-in--cat option { background: var(--bg); color: var(--ink); }
+.kit-rent {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  color: var(--ink-3); font-size: 8.5px; letter-spacing: .13em;
+}
+.kit-rent input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+.kit-row {
+  display: grid; align-items: center; gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  padding: 7px 0; border-bottom: 1px solid var(--hairline-soft);
+}
+.kit-nm { border-color: transparent; padding: 8px 6px; }
+.kit-nm:hover { border-color: var(--hairline); }
+
+.kit-tag {
+  min-height: 34px; padding: 5px 9px; cursor: pointer;
+  border: 1px solid var(--hairline); background: none; color: var(--ink-4);
+  font-family: var(--font-mono); font-size: 8.5px; letter-spacing: .13em;
+  transition: color .2s, border-color .2s;
+}
+.kit-tag.is-rental { border-color: var(--accent-dim); color: var(--accent); }
+.kit-tag:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+.kit-qty { display: inline-flex; align-items: center; gap: 2px; }
+.kit-qty span { min-width: 22px; text-align: center; font-size: 12px; color: var(--ink); }
+.kit-step {
+  width: 30px; height: 34px; cursor: pointer;
+  border: 1px solid var(--hairline); background: none; color: var(--ink-2);
+  font-size: 14px; line-height: 1;
+}
+.kit-step:hover { border-color: var(--accent-dim); color: var(--ink); }
+.kit-step:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+.kit-del {
+  width: 32px; height: 34px; cursor: pointer;
+  border: 1px solid transparent; background: none; color: var(--ink-4);
+  font-size: 13px; line-height: 1;
+  transition: color .2s, border-color .2s;
+}
+.kit-del:hover { color: var(--accent); border-color: var(--hairline); }
+.kit-del:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* a read-only row in the not-yet-adopted state: same shape, no controls */
+.p-item.is-static { cursor: default; }
+.p-item.is-static:hover { color: var(--ink-2); }
+
+@media (max-width: 560px) {
+  .kit-add { grid-template-columns: minmax(0, 1fr) auto; }
+  .kit-add .kit-in--cat { grid-column: 1; }
+  .kit-row { grid-template-columns: repeat(3, auto) 1fr; }
+  .kit-nm { grid-column: 1 / -1; border-color: var(--hairline); }
+  .kit-del { justify-self: end; }
+}
 
 /* =================================================================== MOTION */
 .rise { opacity: 0; transform: translateY(26px); }
@@ -958,15 +1116,23 @@ body.no-motion #hero { filter: none !important; }
    reads as a page change — but it does not travel, and the scrim does not blur */
 body.no-motion .panel-card { transform: none !important; transition: opacity .18s linear; }
 body.no-motion .panel-scrim { backdrop-filter: none; -webkit-backdrop-filter: none; }
+body.no-motion .entry-open:hover svg { transform: none; }
 
-@media (prefers-reduced-motion: reduce) {
-  .rise, .hero-title .ch { opacity: 1 !important; transform: none !important; }
-  .bar .fill, .chapter-head hr { transform: scaleX(1) !important; }
-  .thumb path.line { stroke-dashoffset: 0 !important; }
-  .descend span { animation: none; }
-  .panel-card { transform: none !important; }
-  .entry-open:hover svg { transform: none; }
-}
+/* ★ THERE IS NO `@media (prefers-reduced-motion: reduce)` BLOCK HERE ANY MORE,
+ * AND ITS ABSENCE IS THE POINT.
+ *
+ * One used to sit right here, restating the seven rules above verbatim against
+ * the media query instead of the class. That made the OS setting a SECOND,
+ * unreachable authority: pressing MOTION on set `motion = true`, removed
+ * `body.no-motion`, told all four canvases to run — and every CSS reveal on the
+ * page stayed frozen anyway, because these rules never looked at the class. On
+ * Windows, where the media query reports `reduce` whenever Animation effects are
+ * off, the pill appeared to be lying.
+ *
+ * The media query is now consulted exactly once, in js/main.js, as the first-run
+ * default for a reader who has never touched the pill. After that the stored
+ * choice is the answer, `body.no-motion` is how it is expressed, and there is
+ * one place to look when the page will not move. */
 
 /* ============================================================== RESPONSIVE */
 @media (max-width: 1080px) {
@@ -993,6 +1159,8 @@ body.no-motion .panel-scrim { backdrop-filter: none; -webkit-backdrop-filter: no
   .pill { padding: 6px 10px; font-size: 8.5px; letter-spacing: .1em; }
   .pill span { display: none; }
   .pill::before { margin: 0; }
+  /* the toggles collapse to their state dot; the way to the kit does not */
+  .pill--go span { display: inline; }
   .hero-mark { display: none; }
   #globe-wrap { width: 141vmin; height: 141vmin; right: -60.5vmin; top: 40%; }
   #globe { opacity: .34; }
@@ -1006,6 +1174,20 @@ body.no-motion .panel-scrim { backdrop-filter: none; -webkit-backdrop-filter: no
   .cat { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .foot-grid .sig { text-align: left; }
 }
+/* ★ THE CHAPTER READOUT GOES, THE CONTROLS STAY.
+ *
+ * This used to be `.pill:not(#pill-theme) { display: none }` — which hid MOTION
+ * entirely on a phone. That was survivable while motion booted OFF and the pill
+ * was a way to ask for more; it is not survivable now that motion boots ON,
+ * because the off switch would not exist on the one device most likely to want
+ * it. And KIT is now the page's only real piece of navigation.
+ *
+ * So the thing that leaves at this width is `.chapter`, which is a read-only
+ * label — it reports where you are, and the reader can already see that. Two
+ * dots and a labelled KIT fit in the space it frees. */
 @media (max-width: 460px) {
-  .pill:not(#pill-theme) { display: none; }
+  .chapter { display: none; }
+  .topbar { grid-template-columns: auto 1fr; }
+  .pills { gap: 6px; }
+  .pill { padding: 6px 9px; }
 }

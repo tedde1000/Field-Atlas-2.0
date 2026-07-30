@@ -432,8 +432,20 @@ Writes `trace/shots/*.png` — one per chapter, plus a day-side and two mobile f
   pitch was fixed — the ticking countdown above all — now asks for `tabular-nums`
   explicitly. 1.x self-hosts its faces in `fonts/`; if 2.0 ever needs to work offline, do
   the same here (PROMPT.md task 4 — now one family to download instead of three).
-- **Motion** respects `prefers-reduced-motion`, and the MOTION pill overrides it either
-  way. With motion off the page is fully static and everything is legible — with one
+- **Motion is on by default, and the choice is remembered** in `fa2.motion`. It used to
+  be `motion = !matchMedia('(prefers-reduced-motion: reduce)').matches` and nothing else
+  — the OS setting was re-read on every load and the reader's answer was never stored
+  anywhere, so on Windows, which reports `reduce` whenever *Accessibility → Visual
+  effects → Animation effects* is off, the page booted still every single time and the
+  pill appeared not to work. `prefers-reduced-motion` is now the **first-run hint only**;
+  after that the stored answer wins. Overriding an accessibility setting by default is a
+  real cost, paid on three conditions: the opt-out is one tap, it is in the topbar at
+  every width (the ≤460px block drops the chapter readout rather than this control), and
+  it persists — and on the one cold load where 2.0 overrules a reader who did ask for
+  less motion, the pill wears the accent so the override is visible. The MOTION pill is
+  the single authority: `body.no-motion` is how it is expressed and there is no
+  `@media (prefers-reduced-motion)` block left in `app.css` to disagree with it.
+  With motion off the page is fully static and everything is legible — with one
   deliberate exception: the globe's still-frame signature carries the subsolar
   longitude rounded to the whole degree, so the lighting is allowed to update about
   fifteen times an hour rather than freezing at whatever it was when MOTION went off.

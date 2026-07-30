@@ -53,12 +53,55 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     busyTimer = setTimeout(() => { busy = false; onBusy && onBusy(false); }, BUSY_TAIL);
   }
 
+  /* ★ NOTHING IN read() IS ALLOWED TO READ LAYOUT, AND THAT IS THE WHOLE FIX.
+   *
+   * Theodor: "the stars are still lagging a bit in the background when I'm
+   * scrolling."
+   *
+   * They were, and it was not the starfield — that file is already capped at
+   * 10Hz, quarter-rate while busy, and skips the frame entirely unless the
+   * fastest parallax layer has moved half a pixel. The stall was here. read()
+   * used to WRITE `progress`, `hero` and `globeWrap` styles and then, in the same
+   * pass, READ `getBoundingClientRect()` for every chapter section to work out
+   * which one the reader was in. A style write invalidates layout; a geometry
+   * read afterwards forces the browser to recompute it synchronously before it
+   * can answer. So every scroll frame paid for a full document reflow — with six
+   * chapter sections, an entry list, and a fixed blurred topbar over the top of
+   * it — and the compositor's budget went with it. The starfield was simply the
+   * most visible thing sharing the frame.
+   *
+   * Sections do not move while the reader scrolls, so their positions are
+   * measured once, here, and kept. Everything read() needs is then arithmetic on
+   * numbers that are already in hand. measure() runs at init, on resize, and off
+   * a ResizeObserver — a ResizeObserver callback fires after layout and before
+   * paint, so reading geometry inside it is free, which is exactly the place this
+   * work belongs. The entry list changes height when the display face swaps in
+   * (see the deep-link note in js/main.js) and that is precisely the case the
+   * observer catches and a resize listener alone would not. */
+  const metrics = { vh: 0, doc: 1, tops: sections.map(() => 0) };
+  function measure() {
+    const y = window.scrollY || window.pageYOffset;
+    metrics.vh = window.innerHeight;
+    metrics.doc = Math.max(1, document.documentElement.scrollHeight - metrics.vh);
+    for (let i = 0; i < sections.length; i++) {
+      metrics.tops[i] = sections[i].getBoundingClientRect().top + y;
+    }
+  }
+
   function read() {
     ticking = false;
-    const vh = window.innerHeight;
-    const doc = Math.max(1, document.documentElement.scrollHeight - vh);
+    const vh = metrics.vh;
+    const doc = metrics.doc;
     const y = window.scrollY || window.pageYOffset;
     const p = clamp(y / doc);
+
+    /* which chapter am I in — resolved BEFORE anything is written, off the
+       cached tops. `rect.top <= vh * 0.6` is the same test as this one with the
+       scroll position added back to both sides. */
+    let cur = sections[0];
+    for (let i = 0; i < sections.length; i++) {
+      if (metrics.tops[i] <= y + vh * 0.6) cur = sections[i];
+    }
 
     progress.style.transform = `scaleX(${p})`;
     if (stars) stars.setScroll(p);
@@ -107,11 +150,7 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     // full-resolution repaint per frame on something at 14% behind the scrim
     onGlobeDim && onGlobeDim(go);
 
-    /* ---- which chapter am I in ---- */
-    let cur = sections[0];
-    for (const s of sections) {
-      if (s.getBoundingClientRect().top <= vh * 0.6) cur = s;
-    }
+    /* ---- and report it (resolved above, before the writes) ---- */
     if (cur && cur.id !== state.chapter) {
       state.chapter = cur.id;
       chapterLabel.style.opacity = '0';
@@ -129,12 +168,25 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     if (!ticking) { ticking = true; requestAnimationFrame(read); }
   }
 
+  function remeasure() { measure(); read(); }
+
   window.addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', onScroll);
-  read();
+  window.addEventListener('resize', remeasure);
+
+  /* The page's own height is what invalidates the cache most often — fonts land,
+     thumbnails decode, the display face swaps into every entry — and none of
+     that is a window resize. Observing the document element catches all of it in
+     the one callback where reading layout costs nothing. */
+  let ro = null;
+  if ('ResizeObserver' in window) {
+    ro = new ResizeObserver(() => { measure(); if (!ticking) { ticking = true; requestAnimationFrame(read); } });
+    ro.observe(document.documentElement);
+  }
+
+  remeasure();
 
   return {
-    refresh: read,
+    refresh: remeasure,
     setMotion(on) {
       state.motion = on;
       /* ★ The globe's OPACITY is deliberately not reset here — see the note in
@@ -150,8 +202,9 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     },
     destroy() {
       clearTimeout(busyTimer);
+      ro && ro.disconnect();
       window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('resize', remeasure);
     },
   };
 }

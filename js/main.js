@@ -16,7 +16,8 @@ import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
 import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
 import { stage3d, mount as mount3d } from './layout3d.js';
-import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS, kit } from './gear.js';
+import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS, kit,
+         adopt, addItem, renameItem, setCategory, setRental, setQty, deleteItem } from './gear.js';
 
 /* ============================================================ small helpers */
 const $ = (s, r = document) => r.querySelector(s);
@@ -562,10 +563,131 @@ function renderKit() {
      git history anywhere else — and a reader looking at their own equipment
      deserves to know which, because only one of the two is editable and only one
      of them is current. */
-  $('#kit-src').textContent = k.source === 'live'
-    ? 'READ LIVE FROM FIELD ATLAS 1.x ON THIS DEVICE'
-    : 'FIELD ATLAS 1.x INVENTORY · RECOVERED FROM ITS OWN HISTORY · '
-      + 'THIS DEVICE HAS NO LIVE 1.x DATA';
+  $('#kit-src').textContent = k.source === 'own'
+    ? 'YOUR KIT · EDITED IN FIELD ATLAS 2.0 ON THIS DEVICE'
+    : k.source === 'live'
+      ? 'READ LIVE FROM FIELD ATLAS 1.x ON THIS DEVICE · READ-ONLY UNTIL YOU EDIT IT'
+      : 'FIELD ATLAS 1.x INVENTORY · RECOVERED FROM ITS OWN HISTORY · '
+        + 'THIS DEVICE HAS NO LIVE 1.x DATA';
+}
+
+/* ================================================== THE KIT, AS A PANEL
+ * ★ THE KIT IS A TOOL, AND A TOOL AT THE BOTTOM OF A 12 000-PIXEL PAGE IS NOT ONE.
+ *
+ * Theodor: "you got to basically decide, and you need to scroll all the way down
+ * towards the equipment section and the kit section… it's like you could select
+ * gear pretty early in the website."
+ *
+ * §05 is the sixth of six chapters. Reaching it from the top meant scrolling past
+ * the whole season and the whole catalogue, and on a phone, where the grids
+ * collapse to one column, further still. Nothing in the chrome linked to it.
+ *
+ * So the chapter stays exactly where it is — it is the essay about the kit, and it
+ * belongs at the end of the argument — and the same list is also a panel, on the
+ * existing #panel host, one tap from the topbar at any scroll position. The essay
+ * is where you read about the kit; the panel is where you change it.
+ * ========================================================================= */
+function kitPanel() {
+  const k = kit();
+
+  if (k.source === 'too-new') {
+    return `<div class="p-head"><h2 id="panel-title" class="p-title">The Kit</h2></div>
+      <p class="p-empty">The gear data on this device was written by a newer Field Atlas
+      (schema v${esc(String(k.version))}) than this page knows how to read. Rather than guess at the
+      shape and show you something wrong, 2.0 is staying out of it.</p>`;
+  }
+
+  const n = k.items.length;
+  const rentals = k.items.filter(i => i.rental).length;
+
+  /* ★ ADOPTION IS A BUTTON, NEVER A SIDE EFFECT — see the long note in js/gear.js.
+   * Until it is pressed this list belongs to 1.x and is shown read-only. Copying
+   * 29 recovered items into an editable list the first time someone opened the
+   * panel would recreate exactly the thing 1.x deleted its seed to escape. */
+  const adoptBlock = k.owned ? '' : `
+    <div class="kit-adopt">
+      <p>${k.source === 'live'
+        ? `This is your Field Atlas 1.x inventory, read live from this device. Editing it here
+           makes 2.0 its own copy — <b>1.x is never written to</b>, so the two lists go their own
+           way from that moment.`
+        : `Field Atlas 1.x has never run in this browser, so this is the last inventory it is
+           known to have carried, recovered from its own history. Some of it is generic basics
+           rather than equipment anyone owns.`}</p>
+      <div class="kit-adopt-do">
+        <button class="kit-btn kit-btn--go" type="button" data-kit="adopt-these">
+          ${k.source === 'live' ? 'COPY THESE ' + n + ' ITEMS AND EDIT' : 'START FROM THESE ' + n + ' ITEMS'}
+        </button>
+        <button class="kit-btn" type="button" data-kit="adopt-empty">START EMPTY</button>
+      </div>
+    </div>`;
+
+  const addForm = !k.owned ? '' : `
+    <form class="kit-add" data-kit="add">
+      <input class="kit-in" name="name" type="text" maxlength="60" required
+             placeholder="Add equipment — e.g. 70–200mm f/2.8" aria-label="Item name">
+      <select class="kit-in kit-in--cat" name="category" aria-label="Category">
+        ${GEAR_CATS.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+      </select>
+      <label class="kit-rent">
+        <input type="checkbox" name="rental"> <span class="mono">RENTAL</span>
+      </label>
+      <button class="kit-btn kit-btn--go" type="submit">ADD</button>
+    </form>`;
+
+  const byCat = new Map(GEAR_CATS.map(c => [c, []]));
+  for (const it of k.items) byCat.get(it.category)?.push(it);
+
+  const groups = GEAR_CATS.filter(c => byCat.get(c).length).map(cat => `
+    <div class="p-cat">
+      <div class="p-cat-h mono">${esc(cat)}<span class="n num">${byCat.get(cat).length}</span></div>
+      ${byCat.get(cat).map(it => k.owned ? `
+        <div class="kit-row" data-id="${esc(it.id)}">
+          <input class="kit-in kit-nm" type="text" value="${esc(it.name)}" maxlength="60"
+                 data-kit="rename" aria-label="Name">
+          <select class="kit-in kit-in--cat" data-kit="cat" aria-label="Category">
+            ${GEAR_CATS.map(c => `<option value="${esc(c)}"${c === it.category ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+          </select>
+          <button class="kit-tag mono${it.rental ? ' is-rental' : ''}" type="button"
+                  data-kit="rental" aria-pressed="${it.rental}"
+                  title="Owned or rented">${it.rental ? 'RENTAL' : 'OWNED'}</button>
+          <div class="kit-qty">
+            <button class="kit-step" type="button" data-kit="qty-" aria-label="Fewer">−</button>
+            <span class="num mono">${it.qty}</span>
+            <button class="kit-step" type="button" data-kit="qty+" aria-label="More">+</button>
+          </div>
+          <button class="kit-del" type="button" data-kit="del" aria-label="Delete ${esc(it.name)}">✕</button>
+        </div>` : `
+        <div class="p-item is-static">
+          <span class="nm">${esc(it.name)}</span>
+          ${it.rental ? '<span class="tag mono">RENTAL</span>' : ''}
+          ${it.suggested ? '<span class="tag tag--dim mono">BASIC</span>' : ''}
+          <span class="qty num mono">${it.qty > 1 ? '×' + it.qty : ''}</span>
+        </div>`).join('')}
+    </div>`).join('');
+
+  const empty = n ? '' : `<p class="p-empty">Nothing in the kit yet. Add the first thing above —
+    every date's packing list is a selection from this one inventory, so it is worth being
+    complete.</p>`;
+
+  const src = k.source === 'own'
+    ? `${n} ITEM${n === 1 ? '' : 'S'} · ${rentals} TO HIRE · SAVED ON THIS DEVICE · 1.x UNTOUCHED`
+    : k.source === 'live'
+      ? `${n} ITEMS · READ LIVE FROM FIELD ATLAS 1.x · READ-ONLY`
+      : `${n} ITEMS · RECOVERED FROM FIELD ATLAS 1.x HISTORY · READ-ONLY`;
+
+  return `
+    <div class="p-head">
+      <div class="p-kicker mono"><span class="dot" style="--k:var(--accent)"></span>
+        <span>§05 · THE KIT</span></div>
+      <h2 id="panel-title" class="p-title">The Kit</h2>
+      <div class="p-where mono">One inventory. Every date packs from it.</div>
+    </div>
+    ${adoptBlock}
+    ${addForm}
+    ${groups}
+    ${empty}
+    <div class="p-src mono">${src}</div>
+    <a class="p-out mono" href="#kit" data-jump="kit">READ THE CHAPTER →</a>`;
 }
 
 /* ============================================================== THE PANEL
@@ -864,9 +986,21 @@ function packingHtml(e) {
   const byCat = new Map(GEAR_CATS.map(c => [c, []]));
   for (const it of list.items) byCat.get(it.category)?.push(it);
 
-  const groups = GEAR_CATS.filter(c => byCat.get(c).length).map(cat => `
-    <div class="p-cat"><div class="p-cat-h mono">${esc(cat)}</div>
-      ${byCat.get(cat).map(it => `
+  /* ★ PACKED OVER TOTAL, PER CATEGORY AND OVERALL.
+   *
+   * Theodor: "easier to see what have you packed, what have you not packed."
+   *
+   * A column of tick boxes answers that only by being counted, and counting a
+   * column of tick boxes on a phone is exactly the work the page should be doing.
+   * 1.x prints the same `picked / total` on each group header; this is that. */
+  const groups = GEAR_CATS.filter(c => byCat.get(c).length).map(cat => {
+    const items = byCat.get(cat);
+    const picked = items.filter(i => i.on).length;
+    return `
+    <div class="p-cat"><div class="p-cat-h mono">${esc(cat)}
+        <span class="n num${picked === items.length ? ' is-all' : ''}">${picked} / ${items.length}</span>
+      </div>
+      ${items.map(it => `
         <button class="p-item${it.on ? ' on' : ''}" type="button" data-gear="${esc(it.id)}"
                 aria-pressed="${it.on}">
           <span class="tick" aria-hidden="true"></span>
@@ -875,23 +1009,37 @@ function packingHtml(e) {
           ${it.suggested ? '<span class="tag tag--dim mono">SUGGESTED</span>' : ''}
           <span class="qty num mono">${it.on ? '×' + it.qty : ''}</span>
         </button>`).join('')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
-  const note = list.hadKey
-    ? `${list.total} ITEM${list.total === 1 ? '' : 'S'} · 1.x LIST + THIS DEVICE`
-    : `${list.total} ITEM${list.total === 1 ? '' : 'S'} · NOTHING PICKED IN 1.x FOR THIS DATE`;
+  const onItems = list.items.filter(i => i.on);
+  const note = `${onItems.length} OF ${list.items.length} PACKED` +
+    (list.total !== onItems.length ? ` · ${list.total} PIECES` : '');
+
+  /* Anything ticked that he does not own has to be booked before the weekend, and
+     that is a different kind of task from putting a battery in the bag. 1.x
+     surfaces the same thing off bringHasRental. */
+  const rentals = onItems.filter(i => i.rental);
+  const rentalNote = rentals.length ? `
+    <div class="p-rental">
+      <b class="mono">ARRANGE RENTAL</b>
+      <span>${rentals.map(r => esc(r.name)).join(' · ')}</span>
+    </div>` : '';
 
   /* which inventory these boxes are ticking against — see kit() in js/gear.js */
-  const src = list.source === 'live'
-    ? 'INVENTORY READ LIVE FROM FIELD ATLAS 1.x · TICKS SAVED ONLY IN 2.0'
-    : 'INVENTORY RECOVERED FROM FIELD ATLAS 1.x · NO LIVE 1.x DATA ON THIS DEVICE'
-      + ' · TICKS SAVED ONLY IN 2.0';
+  const src = list.source === 'own'
+    ? 'YOUR KIT · EDITED IN 2.0 · TICKS SAVED PER DATE ON THIS DEVICE'
+    : list.source === 'live'
+      ? 'INVENTORY READ LIVE FROM FIELD ATLAS 1.x · TICKS SAVED ONLY IN 2.0'
+      : 'INVENTORY RECOVERED FROM FIELD ATLAS 1.x · NO LIVE 1.x DATA ON THIS DEVICE'
+        + ' · TICKS SAVED ONLY IN 2.0';
 
   return `<section class="p-sec" id="p-gear">${head}
     <div class="p-gear-sub mono">${note}</div>
+    ${rentalNote}
     ${groups}
     <div class="p-src mono">${src}</div>
-    <a class="p-out mono" href="#kit" data-jump="kit">SEE THE WHOLE KIT →</a>
+    <button class="p-out mono" type="button" data-route="gear">EDIT THE WHOLE KIT →</button>
   </section>`;
 }
 
@@ -1173,6 +1321,7 @@ function boot() {
   const panel = createPanel({
     root: $('#panel'),
     onRender(route) {
+      if (route === 'gear') return kitPanel();   // one kit, so no id after it
       const slash = route.indexOf('/');
       const kind = route.slice(0, slash), id = route.slice(slash + 1);
       return kind === 'date' ? datePanel(id) : circuitPanel(id);
@@ -1218,6 +1367,68 @@ function boot() {
     const entry = ev.target.closest('.entry');
     if (!entry) return;
     panel.openFrom('date/' + entry.dataset.key, entry.querySelector('.entry-open'));
+  });
+
+  /* ------------------------------------------------ editing the kit itself
+   * Everything here writes fa2.gear.inventory and nothing else. The evhub.* keys
+   * are read-only to 2.0 for ever — see the rule at the top of js/gear.js.
+   *
+   * Three listeners rather than one because the controls are three kinds of
+   * thing: a form submit for "add", `change` for the text and select fields
+   * (which must NOT fire per keystroke), and `click` for the buttons.
+   * ==================================================================== */
+  const kitPanelOpen = () => panel.route() === 'gear';
+  const idOf = (el) => el.closest('.kit-row')?.dataset.id || null;
+
+  $('#panel').addEventListener('submit', (ev) => {
+    const form = ev.target.closest('[data-kit="add"]');
+    if (!form || !kitPanelOpen()) return;
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const name = String(fd.get('name') || '').trim();
+    if (!name) return;
+    addItem({ name, category: fd.get('category'), rental: fd.get('rental') != null, qty: 1 });
+    panel.refresh();
+    // put the cursor back where it was: adding kit is a run of several, not one
+    $('#panel').querySelector('.kit-add .kit-nm, .kit-add input[name=name]')?.focus();
+  });
+
+  $('#panel').addEventListener('change', (ev) => {
+    const el = ev.target.closest('[data-kit]');
+    if (!el || !kitPanelOpen()) return;
+    const id = idOf(el);
+    if (!id) return;
+    if (el.dataset.kit === 'rename') {
+      /* deliberately NOT refreshing: the field already shows what was typed, and
+         re-rendering the panel under a focused input takes the caret with it */
+      renameItem(id, el.value);
+      renderKit();
+      return;
+    }
+    if (el.dataset.kit === 'cat') { setCategory(id, el.value); panel.refresh(); renderKit(); }
+  });
+
+  $('#panel').addEventListener('click', (ev) => {
+    const el = ev.target.closest('[data-kit]');
+    if (!el || !kitPanelOpen()) return;
+    const act = el.dataset.kit;
+
+    if (act === 'adopt-these') { adopt(kit().items); panel.refresh(); renderKit(); return; }
+    if (act === 'adopt-empty') { adopt([]); panel.refresh(); renderKit(); return; }
+
+    const id = idOf(el);
+    if (!id) return;
+    const item = kit().items.find(i => i.id === id);
+    if (!item) return;
+
+    if (act === 'rental') setRental(id, !item.rental);
+    else if (act === 'qty+') setQty(id, item.qty + 1);
+    else if (act === 'qty-') setQty(id, item.qty - 1);
+    else if (act === 'del') deleteItem(id);
+    else return;
+
+    panel.refresh();
+    renderKit();          // §05 is showing the same list; keep the two in step
   });
 
   /* Ticking a gear item writes ONLY to fa2.*, never to evhub.* — see js/gear.js.
@@ -1309,17 +1520,48 @@ function boot() {
     `— END OF CATALOGUE · ${ALL.length} CIRCUITS · ${EVENTS.length} DATES · ` +
     `${kit().items.length} ITEMS OF KIT`;
 
-  /* --- the two pills --- */
+  /* --- the pills --- */
+  /* ★ MOTION IS ON BY DEFAULT NOW, AND THE CHOICE IS REMEMBERED.
+   *
+   * Theodor: "make motion as a standard option, because every time I go in on the
+   * side the motion is switched off."
+   *
+   * He was not forgetting to press it and the pill was not broken. This was
+   * `let motion = !prefersStill` and nothing else — the OS media query was read
+   * fresh on every single load and the reader's answer was never written down
+   * anywhere. Windows reports `prefers-reduced-motion: reduce` whenever Settings
+   * → Accessibility → Visual effects → Animation effects is off, which is a
+   * common default on a managed machine, so the page booted still every time on
+   * both his devices. trace/verify.mjs had already run into the same split
+   * between headless Chrome on Windows and on macOS and pinned the media feature
+   * in the TEST rather than fixing the app.
+   *
+   * So the OS preference is now the FIRST-RUN HINT ONLY, and the stored answer
+   * wins ever after. Overriding an accessibility setting by default is a real
+   * cost and it is paid deliberately, on three conditions: the opt-out is one
+   * tap, it is in the topbar on every screen at every width (see the 460px block
+   * in app.css, which now drops the chapter readout rather than this control),
+   * and it sticks. And on the one cold load where 2.0 overrules a reader who did
+   * ask for less motion, the pill wears the accent so the override is something
+   * they can see rather than something done quietly behind them. */
   const prefersStill = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let motion = !prefersStill;
+  let motionSaved = null;
+  try { motionSaved = localStorage.getItem('fa2.motion'); } catch {}
+  let motion = motionSaved ? motionSaved === 'on' : true;
   const motionPill = $('#pill-motion');
+  if (!motionSaved && prefersStill) motionPill.classList.add('pill--flag');
   const applyMotion = () => {
     document.body.classList.toggle('no-motion', !motion);
     motionPill.setAttribute('aria-pressed', String(motion));
     stars.setMotion(motion); globe.setMotion(motion);
     fig.setMotion(motion); scroll.setMotion(motion);
   };
-  motionPill.addEventListener('click', () => { motion = !motion; applyMotion(); });
+  motionPill.addEventListener('click', () => {
+    motion = !motion;
+    motionPill.classList.remove('pill--flag');   // answered, either way
+    try { localStorage.setItem('fa2.motion', motion ? 'on' : 'off'); } catch {}
+    applyMotion();
+  });
   applyMotion();
 
   const themePill = $('#pill-theme');

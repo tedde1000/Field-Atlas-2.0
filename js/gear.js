@@ -137,6 +137,82 @@ export const KIT_1X = [
   { id: 'wx-sunscreen', name: 'Sunscreen', category: 'Weather & Apparel', status: 'owned', defaultQty: 1, suggested: true },
 ];
 
+/* ===================================================== 2.0'S OWN KIT
+ * ★ 2.0 IS AN EDITOR NOW, AND IT STILL DOES NOT TOUCH evhub.*
+ *
+ * Theodor: "you could select gear pretty early in the website… you can choose
+ * what gear you have, what gear you also wanna have in the lists, but that's
+ * gonna have a bit of a renting sign on it."
+ *
+ * That is an inventory editor, and until now this file could only read. The rule
+ * at the top of the file does not bend for it: the editable list is 2.0's own,
+ * under `fa2.gear.inventory`, and evhub.* remains read-only for ever. The trade
+ * is the same one already made for the bring overlay — the two apps stay
+ * independent, and 2.0 can never corrupt the gear data.
+ *
+ * ★ AND IT IS NOT SEEDED ON READ. This is the one thing to be careful about here,
+ * because 1.x already learned it the hard way and left the lesson in its source:
+ *
+ *     "Start EMPTY. The app used to seed 29 suggested items on first run, which
+ *      meant the kit opened full of equipment nobody owned and the real job
+ *      became deleting things. It's your kit — you add it."
+ *
+ * Auto-copying KIT_1X into an editable list the first time kit() happened to be
+ * called would recreate precisely that, and quietly. So kit() NEVER writes.
+ * Until the reader adopts a list, what they are shown is the read-only 1.x view
+ * exactly as before, `owned` is false, and the panel offers the choice in words.
+ * Adoption is one explicit act — adopt() — and it is the only thing that brings
+ * `fa2.gear.inventory` into existence.
+ * ==================================================================== */
+const FA2_INV = 'fa2.gear.inventory';
+const FA2_INV_V = 1;
+
+const newId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+/* One shape, whichever end it came from: 1.x writes `status`/`defaultQty`, 2.0
+   writes `rental`/`qty`, and everything downstream of here sees only the latter. */
+function normalise(it) {
+  const q = it.qty !== undefined ? it.qty : it.defaultQty;
+  return {
+    id: it.id ? String(it.id) : newId(),
+    name: String(it.name || '').trim() || 'Untitled',
+    category: GEAR_CATS.includes(it.category) ? it.category : GEAR_CATS[0],
+    rental: it.rental !== undefined ? !!it.rental : it.status === 'rental',
+    suggested: !!it.suggested,
+    qty: Math.max(1, Math.min(99, Math.round(+q || 1))),
+  };
+}
+
+/**
+ * 2.0's own inventory, if it exists.
+ * `present:false` means never adopted, which is NOT the same as adopted-and-empty
+ * — an empty kit is a legitimate state a reader can choose and must survive a
+ * reload, so the two cannot be collapsed.
+ */
+function own() {
+  const s = raw(FA2_INV);
+  if (s == null) return { present: false, items: [], tooNew: false };
+  let box;
+  try { box = JSON.parse(s); } catch { return { present: false, items: [], tooNew: false }; }
+  if (!box || typeof box !== 'object') return { present: false, items: [], tooNew: false };
+  const v = Number(box.__v) || 0;
+  // written by a later 2.0 than this one: show nothing rather than a wrong guess,
+  // and — critically — never overwrite it
+  if (v > FA2_INV_V) return { present: true, items: [], tooNew: true };
+  return {
+    present: true,
+    items: Array.isArray(box.items) ? box.items.map(normalise) : [],
+    tooNew: false,
+  };
+}
+
+function writeOwn(items) {
+  try {
+    localStorage.setItem(FA2_INV, JSON.stringify({ __v: FA2_INV_V, items }));
+    return true;
+  } catch { return false; }
+}
+
 /**
  * The kit to show, and where it came from — one answer for the whole page.
  *
@@ -145,25 +221,90 @@ export const KIT_1X = [
  * 1.x is known to have carried, and every surface that prints this list prints
  * that too.
  *
- *   'live'      evhub.gear.inventory exists and has items. His actual kit.
- *   'recovered' it does not. KIT_1X, from 1.x's git history — see above.
- *   'too-new'   a newer 1.x wrote a schema this page does not understand. We
- *               refuse to interpret it rather than guess at the shape.
+ *   'own'       fa2.gear.inventory — adopted, editable, 2.0's. The normal state.
+ *   'live'      evhub.gear.inventory exists and has items. His actual 1.x kit,
+ *               shown read-only because nothing has been adopted yet.
+ *   'recovered' neither. KIT_1X, from 1.x's git history — see above. Read-only.
+ *   'too-new'   a newer 1.x or 2.0 wrote a schema this page does not understand.
+ *               We refuse to interpret it rather than guess at the shape.
+ *
+ * `owned` is what the UI gates editing on. It is exactly `source === 'own'`, and
+ * it is returned separately because that is the question every caller is asking.
  */
 export function kit() {
+  const mine = own();
+  if (mine.tooNew) return { source: 'too-new', owned: false, version: 'fa2', items: [] };
+  if (mine.present) return { source: 'own', owned: true, items: mine.items };
+
   const inv = inventory();
-  if (inv.tooNew) return { source: 'too-new', version: inv.version, items: [] };
+  if (inv.tooNew) return { source: 'too-new', owned: false, version: inv.version, items: [] };
   const live = inv.present && inv.value.length;
-  const raw = live ? inv.value : KIT_1X;
-  const items = raw.map((it) => ({
-    id: it.id,
-    name: it.name || 'Untitled',
-    category: GEAR_CATS.includes(it.category) ? it.category : GEAR_CATS[0],
-    rental: it.status === 'rental',
-    suggested: !!it.suggested,
-    qty: Math.max(1, Math.round(+it.defaultQty || 1)),
-  }));
-  return { source: live ? 'live' : 'recovered', items };
+  return {
+    source: live ? 'live' : 'recovered',
+    owned: false,
+    items: (live ? inv.value : KIT_1X).map(normalise),
+  };
+}
+
+/** has the reader taken ownership of a list yet? */
+export const ownsKit = () => own().present;
+
+/**
+ * Take ownership. This is the ONLY thing that creates `fa2.gear.inventory`, and
+ * it is always the result of a button the reader pressed — see the note above.
+ * Passing [] is a legitimate call: "start empty" is a choice the panel offers.
+ */
+export function adopt(items) {
+  if (own().tooNew) return false;             // never clobber a newer schema
+  return writeOwn((items || []).map(normalise));
+}
+
+/* Every mutator below is a no-op unless a list has been adopted. The panel hides
+   the edit controls until then, so this is a guard and not a code path — but it
+   is a guard worth having, because the alternative when it fires is adopting 29
+   items nobody asked for. */
+function edit(fn) {
+  const mine = own();
+  if (!mine.present || mine.tooNew) return false;
+  const next = fn(mine.items);
+  return next ? writeOwn(next.map(normalise)) : false;
+}
+
+const patch = (id, change) =>
+  edit(items => items.map(it => (it.id === id ? { ...it, ...change } : it)));
+
+export function addItem({ name, category, rental = false, qty = 1 } = {}) {
+  const item = normalise({ name, category, rental, qty });
+  return edit(items => [...items, item]) ? item.id : null;
+}
+
+export const renameItem = (id, name) => patch(id, { name });
+export const setCategory = (id, category) => patch(id, { category });
+export const setRental = (id, rental) => patch(id, { rental: !!rental });
+export const setQty = (id, qty) => patch(id, { qty });
+
+/**
+ * Remove an item, and every tick of it on every date.
+ *
+ * ★ THE SWEEP IS NOT OPTIONAL. `fa2.bring.<key>` maps item ids to quantities and
+ * knows nothing about the inventory, so deleting an item without it leaves ticks
+ * pointing at an id that no longer resolves. They are invisible — packingList()
+ * builds its rows from the inventory, so an orphan simply never renders — and
+ * they come back to life the moment an id is reused. 1.x does the same sweep in
+ * invDelete() for the same reason.
+ */
+export function deleteItem(id) {
+  if (!edit(items => items.filter(it => it.id !== id))) return false;
+  let keys = [];
+  try { keys = Object.keys(localStorage); } catch { return true; }
+  for (const k of keys) {
+    if (!k.startsWith('fa2.bring.')) continue;
+    const map = overlay(k.slice('fa2.bring.'.length));
+    if (!Object.prototype.hasOwnProperty.call(map, id)) continue;
+    delete map[id];
+    setOverlay(k.slice('fa2.bring.'.length), map);
+  }
+  return true;
 }
 
 /**

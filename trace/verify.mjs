@@ -174,7 +174,61 @@ await p.click('#pill-motion'); await sleep(300);
 ok(await p.$eval('body', b => b.classList.contains('no-motion')), 'motion pill stops motion');
 ok(await p.evaluate(() => getComputedStyle(document.querySelector('.hero-title .ch')).opacity) === '1',
    'title stays legible with motion off');
+ok(await p.evaluate(() => localStorage.getItem('fa2.motion')) === 'off',
+   'and the choice persists to localStorage');
 await p.close();
+
+/* -- 4b · ★ MOTION BOOTS ON EVEN WHERE THE OS ASKS FOR LESS OF IT.
+ *
+ * Theodor: "make motion as a standard option, because every time I go in on the
+ * side the motion is switched off."
+ *
+ * This is the case the rest of the suite deliberately pins away from — see the
+ * long note over open(), which emulates `no-preference` so every machine tests
+ * the same page. That pin is right for the other 157 checks and it is exactly why
+ * this bug survived: on Windows, where Chrome reports `reduce` whenever Animation
+ * effects are off, the page booted still on every load and the suite never saw
+ * it. `motion = !prefersStill` was the whole implementation and there was no
+ * persistence at all.
+ *
+ * So this one check goes the other way on purpose. Under `reduce`, with nothing
+ * stored: motion is ON, the pill says so, and it wears the accent so the override
+ * is visible rather than silent. With `off` stored, the stored answer wins — the
+ * media query is a first-run hint and nothing more. */
+{
+  const rp = await browser.newPage();
+  await rp.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+  await rp.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  await rp.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch {} });
+  await rp.goto(BASE, { waitUntil: 'networkidle0' });
+  await sleep(1200);
+  ok(!(await rp.$eval('body', b => b.classList.contains('no-motion'))),
+     '★ motion boots ON under prefers-reduced-motion: reduce');
+  ok(await rp.$eval('#pill-motion', b => b.getAttribute('aria-pressed')) === 'true',
+     'and the pill reports it');
+  ok(await rp.$eval('#pill-motion', b => b.classList.contains('pill--flag')),
+     'and flags itself, so overriding the OS preference is visible');
+  /* app.css used to carry `@media (prefers-reduced-motion: reduce) { html {
+     scroll-behavior: auto } }`, which no pill could reach. If the media query is
+     still an authority anywhere, this is where it shows. */
+  ok(await rp.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior) === 'smooth',
+     'and the media query is no longer a second, unreachable authority');
+  await rp.close();
+
+  const sp = await browser.newPage();
+  await sp.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+  await sp.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  await sp.evaluateOnNewDocument(() => {
+    try { localStorage.clear(); localStorage.setItem('fa2.motion', 'off'); } catch {}
+  });
+  await sp.goto(BASE, { waitUntil: 'networkidle0' });
+  await sleep(1200);
+  ok(await sp.$eval('body', b => b.classList.contains('no-motion')),
+     'a stored "off" survives a reload');
+  ok(!(await sp.$eval('#pill-motion', b => b.classList.contains('pill--flag'))),
+     'and an answered pill is not flagged again');
+  await sp.close();
+}
 
 /* ----------------------------------------------------- 5. deep links + scroll */
 console.log('\n5 · deep links and scroll state');
@@ -548,6 +602,80 @@ ok(evhubAfter.fa2.length === 1 && evhubAfter.fa2[0] === 'fa2.bring.' + seedKey,
   JSON.stringify(evhubAfter.fa2));
 ok(await p.evaluate(() => !!document.getElementById('p-gear')),
   'the panel survived a gear tick and re-render');
+await p.close();
+
+/* -- 9h · ★ THE KIT IS EDITABLE IN 2.0 NOW, AND evhub.* IS STILL UNTOUCHED.
+ *
+ * Theodor: "you could select gear pretty early in the website… you can choose
+ * what gear you have, what gear you also wanna have in the lists, but that's
+ * gonna have a bit of a renting sign on it."
+ *
+ * That made 2.0 an inventory editor, which is the one thing js/gear.js's opening
+ * rule said it would never be — so the editable list is 2.0's own, under
+ * fa2.gear.inventory, and 9g's guarantee has to survive every mutator and not
+ * just the tick. This exercises all of them and re-checks the evhub snapshot.
+ *
+ * ★ AND kit() MUST NOT SEED ON READ. 1.x deleted its own 29-item seed because
+ * "the kit opened full of equipment nobody owned and the real job became deleting
+ * things". Adopting on first render would recreate exactly that, quietly, so
+ * ownership is a button and the read-only state has to be observable first. */
+p = await open('#gear');
+const kitCold = await p.evaluate(() => ({
+  open: document.getElementById('panel').classList.contains('is-open'),
+  adopt: !!document.querySelector('[data-kit="adopt-these"]'),
+  editable: document.querySelectorAll('.kit-row').length,
+  readonly: document.querySelectorAll('#panel .p-item.is-static').length,
+  stored: localStorage.getItem('fa2.gear.inventory'),
+}));
+ok(kitCold.open, '★ the topbar route #gear opens the kit as a panel', JSON.stringify(kitCold));
+ok(kitCold.stored === null,
+  '★ and opening it does not adopt a kit behind the reader', String(kitCold.stored));
+ok(kitCold.adopt && kitCold.editable === 0 && kitCold.readonly > 0,
+  'an unadopted kit is read-only, and says how to take it', JSON.stringify(kitCold));
+
+const evhubKit0 = await p.evaluate(() =>
+  Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith('evhub.'))));
+
+const edited = await p.evaluate(async () => {
+  const w = () => new Promise(r => setTimeout(r, 140));
+  document.querySelector('[data-kit="adopt-these"]').click(); await w();
+  const adopted = document.querySelectorAll('.kit-row').length;
+
+  const f = document.querySelector('form[data-kit="add"]');
+  f.querySelector('[name=name]').value = 'Test 600mm';
+  f.querySelector('[name=category]').value = 'Lenses';
+  f.querySelector('[name=rental]').checked = true;
+  f.requestSubmit(); await w();
+
+  const inv = () => JSON.parse(localStorage.getItem('fa2.gear.inventory')).items;
+  const mine = inv().find(i => i.name === 'Test 600mm');
+
+  const row = () => [...document.querySelectorAll('.kit-row')].find(r => r.dataset.id === mine.id);
+  row().querySelector('[data-kit="qty+"]').click(); await w();
+  row().querySelector('[data-kit="rental"]').click(); await w();
+  const nm = row().querySelector('[data-kit="rename"]');
+  nm.value = 'Test 600mm II';
+  nm.dispatchEvent(new Event('change', { bubbles: true })); await w();
+  const after = inv().find(i => i.id === mine.id);
+
+  row().querySelector('[data-kit="del"]').click(); await w();
+  return { adopted, added: !!mine, addedRental: mine.rental, cat: mine.category,
+           qty: after.qty, rentalToggled: after.rental, renamed: after.name,
+           gone: !inv().some(i => i.id === mine.id), count: inv().length };
+});
+ok(edited.adopted > 0 && edited.count === edited.adopted,
+  'adopting takes the shown list and makes it editable', JSON.stringify(edited));
+ok(edited.added && edited.addedRental && edited.cat === 'Lenses',
+  'a new item can be added, categorised and marked RENTAL', JSON.stringify(edited));
+ok(edited.qty === 2 && edited.rentalToggled === false && edited.renamed === 'Test 600mm II',
+  'quantity, owned/rental and name are all editable', JSON.stringify(edited));
+ok(edited.gone, 'and an item can be deleted');
+
+const evhubKit1 = await p.evaluate(() =>
+  Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith('evhub.'))));
+ok(JSON.stringify(evhubKit0) === JSON.stringify(evhubKit1),
+  '★ and none of it wrote a single evhub key — the 1.x contract holds',
+  `before ${JSON.stringify(evhubKit0)} after ${JSON.stringify(evhubKit1)}`);
 await p.close();
 
 /* -- 9h · a hash naming something that does not exist must not open a panel -- */
@@ -1007,6 +1135,38 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     '★ the §03 racing line swings across most of the road', `swing=${fig.swing}`);
   ok(Number(fig.swing) <= 1.001,
     'and never leaves it', `swing=${fig.swing}`);
+
+  /* -- 12b″ · ★ AND IT HAS NO CORNERS IN IT.
+   *
+   * Theodor: "the lines is maybe a bit better, but it's still not racing lines.
+   * You're not supposed to take a racing line like that."
+   *
+   * `swing` above proves the line uses the road. It says nothing at all about
+   * whether the line is DRIVEABLE, and it was not: at 2 600 nodes under a metre
+   * apart, the sharpest joint in the drawn line measured 132° at Uddevalla, 122°
+   * at Åsum and 46° here. A joint is the angle between one segment and the next,
+   * so those are not tight corners — they are vertices, and no car has ever been
+   * driven round one. The cause was a corridor fixed at 28 px regardless of the
+   * circuit, which at Uddevalla is four times its own tightest corner radius; the
+   * offset geometry was degenerate at both extremes. See CORRIDOR_CAP in
+   * js/circuit.js.
+   *
+   * 25° is the threshold because the whole atlas now sits under it with room —
+   * measured worst is 31° across all 21 circuits, and Gelleråsen specifically is
+   * 15°. Anything that reintroduces a fictional corridor puts this straight back
+   * into three figures, so it cannot pass by accident.
+   *
+   * `apex` is where the line sits closest to the inside, meaned over every
+   * numbered corner, as a fraction of the corner: 0.5 is the geometric middle —
+   * the biggest circle that fits — and a driver is past it. */
+  ok(Number(fig.kink) < 25,
+    '★ and it is a line, not a polygon — no visible vertex anywhere in it',
+    `sharpest joint=${fig.kink}°`);
+  ok(Number(fig.apex) > 0.5,
+    'and it apexes past the geometric middle of the corner',
+    `apex=${fig.apex}`);
+  ok(/^[a-z,-]+$/.test(fig.kinds || '') && fig.kinds.split(',').length === Number(fig.corners),
+    'and every numbered corner is classified by shape', fig.kinds);
 
   /* -- 12b′ · ★ AND IT IS SOLVED FOR TIME, AT RESOLUTION.
    *

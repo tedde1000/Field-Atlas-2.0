@@ -32,7 +32,7 @@
  * ======================================================================== */
 
 import { loopSample, curvature, numberedCorners, racingLine, loopLength,
-         resampleUniform, speedProfile, KART, CAR } from './loop.js';
+         resampleUniform, speedProfile, cornerArchetypes, KART, CAR } from './loop.js';
 
 const TAU = Math.PI * 2;
 
@@ -58,12 +58,16 @@ const TAU = Math.PI * 2;
  * kink survives is now spread over twice as many nodes, so the same lateral
  * movement is drawn with half the angle at each joint.
  *
- * ★ EVERYTHING THAT MEASURES A DISTANCE IN NODES SCALES WITH IT. relWindow() and
- * relGap() in js/loop.js, the bump width K, the stride, and the flow's advance
- * and streak length below are all fractions of the lap, not counts — raising this
- * number silently changed the meaning of every one of them the first time. The
- * whole solve still lands in about a tenth of a second, once, when the reader
- * picks a circuit. */
+ * ★ EVERYTHING THAT MEASURES A DISTANCE IN NODES SCALES WITH IT. relGap() in
+ * js/loop.js, the bump width K, the stride, and the flow's advance and streak
+ * length below are all fractions of the lap, not counts — raising this number
+ * silently changed the meaning of every one of them the first time. The lap-time
+ * window is the one exception and deliberately so: it is a distance in METRES,
+ * off the vehicle, because a fraction of the lap is not the distance a corner
+ * exit is paid back over. See BACK/FWD in racingLine().
+ *
+ * The whole solve lands in about a fifth of a second, once, when the reader picks
+ * a circuit — up from a tenth, which is what the honest time window costs. */
 const NODES = 2600;
 
 /* the flow is drawn as one path per alpha band rather than one per particle —
@@ -84,6 +88,43 @@ const buckets = new Array(ALPHA_STEPS).fill(null);
  * trace units because the three geometry sources have three different artboards;
  * converted through S.scale in fit(). */
 const HALF_PX = 14;
+
+/* ★ AND CAPPED BY THE CIRCUIT'S OWN TIGHTEST CORNER, WHICH IS THE WHOLE FIX.
+ *
+ * Theodor: "the lines is maybe a bit better, but it's still not racing lines.
+ * You're not supposed to take a racing line like that."
+ *
+ * A flat 28 px is not a width, it is a wish. Measured at Uddevalla it made the
+ * corridor 39 trace units across a corner whose drawn radius is about 10 — a road
+ * four times wider than its own corners, which is not a track, it is an
+ * impossibility. Offsetting into it does what offsetting into an impossibility
+ * always does: on the outside of the corner the line's segments stretched to six
+ * times the centreline spacing, on the inside they collapsed to a quarter of it,
+ * and the joint between two of them measured 132°. That is a corner IN THE LINE,
+ * at a node spacing under a metre, and it is what he was looking at.
+ *
+ * The clamp in js/loop.js was already trying to hold this back and could not: it
+ * bounds each node against folding, but when the corridor is that far past what
+ * the geometry supports, the bound becomes the shape and its own steps become the
+ * kinks. Fixing it downstream — smoothing harder, relieving collapsed segments,
+ * de-kinking afterwards — was treating a width problem as a smoothness problem.
+ *
+ * So the corridor is now the narrower of the drawn 28 px and what the circuit can
+ * actually carry: eight tenths of its tightest corner radius, off the 99.3rd
+ * percentile of curvature so one noisy node cannot set it for the whole lap.
+ * Across all 21 circuits that takes joints over 20° from 121 to 5, the worst joint
+ * from 72° to 31°, and the collapse detector from 26 rescues to 4 — and the apexes
+ * come out slightly LATER rather than paying for it, because the search finally
+ * has a corridor it can move inside instead of a bound it is pinned against.
+ *
+ * It also lands, without being asked to, at roughly 1.2–1.8x true track width
+ * where the old constant was six times it. That is not a coincidence: real
+ * circuits are built with corner radii proportionate to how wide they are, so a
+ * width derived from the radii is close to the real one by construction. The
+ * exaggeration the legend promises is still there, and it is now the most the
+ * drawing can honestly hold rather than a number that happened to look right on
+ * the one circuit it was chosen on. */
+const CORRIDOR_CAP = 0.8;
 
 /* =========================================================================== */
 export function createCircuitFigure(canvas) {
@@ -143,9 +184,34 @@ export function createCircuitFigure(canvas) {
   const offX = (i, px) => (S.pts[i][0] + S.nx[i] * px / S.scale) * S.scale + S.ox;
   const offY = (i, px) => (S.pts[i][1] + S.ny[i] * px / S.scale) * S.scale + S.oy;
 
+  /* ★ THE CORRIDOR STAYS EXAGGERATED, AND THAT IS NOT THE BUG.
+   *
+   * The obvious reading of "these are not racing lines" is that the road is six
+   * times too wide, so solve at the real 8–10 m and magnify the answer for the
+   * drawing. That was tried and measured across all 21 circuits, and it is wrong
+   * — for a reason worth writing down so it is not tried again.
+   *
+   * A kart hairpin has a radius of about eight metres. The track is about eight
+   * metres wide. So `d·κ` at the true half-width is already ~0.5: the real racing
+   * line on a real kart circuit uses up half its own fold budget just existing.
+   * Magnifying that by six folds the drawn line inside out, and capping the
+   * magnification to avoid the fold leaves it at 1.2–1.7x — which puts the drawn
+   * swing back down to 0.3 of the ribbon on half the atlas. The figure would go
+   * back to looking like the centreline, which is the exact defect §03 was built
+   * to fix. Measured: swing fell to 0.30 at Uddevalla and 0.35 at Vuollerim, and
+   * the sharpest joint went UP, to 145° at Åsum.
+   *
+   * The corridor is a drawing decision and it is the right one. What was actually
+   * wrong with the line is the OBJECTIVE it was solved against — a time window
+   * shorter than the straight it was supposed to be paying for. See the note over
+   * BACK/FWD in js/loop.js. */
   function solve() {
     if (!S.pts || !S.scale) return;
-    S.half = HALF_PX / S.scale;
+    /* the drawn corridor, and the one the geometry can carry — see CORRIDOR_CAP.
+       `halfPx` is what the ribbon is stroked at, so the road the reader sees is
+       always the road the line was solved in. */
+    S.halfPx = Math.min(HALF_PX, CORRIDOR_CAP * S.rMin * S.scale);
+    S.half = S.halfPx / S.scale;
     /* ★ The vehicle and the scale are what turn this from a geometry solve into a
      * lap-time solve. Without both, racingLine() falls back to minimum curvature
      * and says so, which is what happens for a circuit whose length was never
@@ -154,6 +220,8 @@ export function createCircuitFigure(canvas) {
     S.line = r.line; S.d = r.d; S.nx = r.nx; S.ny = r.ny;
     S.geometric = r.geometric;
     S.lap = r.lap || 0; S.gain = r.gain || 0;
+    S.relieved = r.relieved || 0;
+    S.apexAt = r.apexAt || null;
     S.rk = curvature(S.line);
     /* the flow is paced off SPEED now, where it used to be paced off curvature.
        They agree in a corner and disagree everywhere that matters: a driver is
@@ -192,6 +260,24 @@ export function createCircuitFigure(canvas) {
        and to an arc-length integral. */
     S.pts = resampleUniform(shaped, NODES);
     S.k = curvature(S.pts);
+
+    /* ★ THE TIGHTEST CORNER ON THE DRAWING, WHICH SETS HOW WIDE THE ROAD MAY BE.
+     * curvature() is heading change over ±3 nodes, so per unit of arc length it is
+     * k/(6·ds). The 99.3rd percentile rather than the maximum: one node of
+     * flattener noise must not decide the corridor for the whole lap, and at 2 600
+     * nodes that still leaves ~18 nodes tighter than the figure it returns. */
+    {
+      const nn = S.pts.length;
+      let arc = 0;
+      for (let i = 0; i < nn; i++) {
+        const a = S.pts[i], b = S.pts[(i + 1) % nn];
+        arc += Math.hypot(b[0] - a[0], b[1] - a[1]);
+      }
+      const ds = arc / nn;
+      const mag = Array.from(S.k, (v) => Math.abs(v) / (6 * ds)).sort((a, b) => a - b);
+      const kMax = mag[Math.floor(nn * 0.993)];
+      S.rMin = kMax > 1e-9 ? 1 / kMax : Infinity;
+    }
     S.names = track.cornerNames || null;
     S.colour = track.colour || tok('--accent', '#c9974f');
 
@@ -216,6 +302,19 @@ export function createCircuitFigure(canvas) {
     S.corners = S.target === 0 && track.track?.runway
       ? []
       : numberedCorners(S.pts, S.k, S.target).map((c, idx) => ({ ...c, no: idx + 1 }));
+
+    /* what SHAPE each of those corners is — hairpin, double apex, increasing or
+       decreasing radius, linked, or classic. Nothing downstream shapes the line
+       from this; it is the description the solved line gets checked against. See
+       cornerArchetypes() in js/loop.js. */
+    const kinds = cornerArchetypes(S.pts, S.k, S.corners, {
+      metresPerNode: (track.track?.lengthM || 0) / S.pts.length,
+    });
+    S.corners.forEach((c, i) => {
+      c.kind = kinds[i]?.kind || null;
+      c.radius = kinds[i]?.radius ?? null;
+      c.wants = kinds[i]?.wants ?? 0.58;
+    });
 
     /* real names win for the LABEL, never for the numbering: snap each name to
        the nearest numbered corner rather than to the nearest node, so "T7 ·
@@ -301,15 +400,15 @@ export function createCircuitFigure(canvas) {
     const centre = (i) => [X(S.pts[i]), Y(S.pts[i])];
     ribbon(centre);
     g.strokeStyle = isDay ? 'rgba(22,21,15,.11)' : 'rgba(236,229,217,.075)';
-    g.lineWidth = HALF_PX * 2;
+    g.lineWidth = S.halfPx * 2;
     g.stroke();
 
     /* -- both edges of the road, struck thin. Without these the corridor has no
           boundary and "wide" has nothing to be wide OF. */
     for (const side of [-1, 1]) {
       g.beginPath();
-      g.moveTo(offX(0, side * HALF_PX), offY(0, side * HALF_PX));
-      for (let i = 1; i < shown; i++) g.lineTo(offX(i, side * HALF_PX), offY(i, side * HALF_PX));
+      g.moveTo(offX(0, side * S.halfPx), offY(0, side * S.halfPx));
+      for (let i = 1; i < shown; i++) g.lineTo(offX(i, side * S.halfPx), offY(i, side * S.halfPx));
       if (shown >= n) g.closePath();
       g.strokeStyle = isDay ? 'rgba(22,21,15,.30)' : 'rgba(236,229,217,.20)';
       g.lineWidth = 1.1;
@@ -456,12 +555,12 @@ export function createCircuitFigure(canvas) {
 
     // -- start / finish, struck across the whole road rather than a stub
     if (shown >= n * 0.98) {
-      const x0 = offX(0, -HALF_PX), y0 = offY(0, -HALF_PX);
-      const x1 = offX(0, HALF_PX), y1 = offY(0, HALF_PX);
+      const x0 = offX(0, -S.halfPx), y0 = offY(0, -S.halfPx);
+      const x1 = offX(0, S.halfPx), y1 = offY(0, S.halfPx);
       g.strokeStyle = isDay ? 'rgba(22,21,15,.62)' : 'rgba(236,229,217,.6)';
       g.lineWidth = 2;
       g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      const lx = offX(0, -(HALF_PX + 13)), ly = offY(0, -(HALF_PX + 13));
+      const lx = offX(0, -(S.halfPx + 13)), ly = offY(0, -(S.halfPx + 13));
       label(g, lx, ly, 'S/F', ink3, 'centre', 9);
     }
 
@@ -497,7 +596,7 @@ export function createCircuitFigure(canvas) {
           therefore nothing to cover. A named corner gets its name beside it. */
     for (const c of S.corners) {
       const out = -(Math.sign(c.turn) || 1);
-      const px = HALF_PX + 11;
+      const px = S.halfPx + 11;
       const x = offX(c.i, out * px), y = offY(c.i, out * px);
 
       g.globalAlpha = alpha;
@@ -552,16 +651,66 @@ export function createCircuitFigure(canvas) {
        circle that fits". */
     canvas.dataset.nodes = String(S.pts ? S.pts.length : 0);
     canvas.dataset.solve = S.geometric === false ? 'lap-time' : 'curvature';
+    /* ★ The line's geometric health, published so it can be asserted from outside
+       instead of eyeballed. `kink` is the sharpest joint anywhere in the drawn
+       line in degrees — at a node spacing under a metre, anything into double
+       figures is a visible corner in the line and the whole reason the corridor is
+       now capped. `corridor` is what that cap allowed, in px. `apex` is where the
+       line actually sits closest to the inside, meaned over every numbered corner,
+       as a fraction of the corner: 0.5 is the geometric middle and a driver's line
+       is past it. `kinds` names the six shapes — see cornerArchetypes(). */
+    canvas.dataset.kink = api.worstJoint().toFixed(1);
+    canvas.dataset.corridor = (S.halfPx || 0).toFixed(1);
+    canvas.dataset.apex = api.apexMean().toFixed(3);
+    canvas.dataset.kinds = S.corners.map(c => c.kind || '?').join(',');
   }
   const api = {
     load(track) { load(track); },
     resize() { resize(); },
-    /** the corners as the legend wants them: number, name, angle */
+    /** the corners as the legend wants them: number, name, angle, shape */
     corners: () => S.corners.map(c => ({
       no: c.no,
       label: c.label || null,
       turn: c.turn == null ? null : Math.abs(Math.round(c.turn * 180 / Math.PI)),
+      kind: c.kind || null,
     })),
+
+    /** the sharpest joint anywhere in the drawn line, in degrees. A racing line
+        has no vertices, so this is the figure's single best self-check. */
+    worstJoint: () => {
+      const L = S.line;
+      if (!L || L.length < 3) return 0;
+      const n = L.length;
+      let worst = 0;
+      for (let i = 0; i < n; i++) {
+        const a = L[(i - 1 + n) % n], b = L[i], c = L[(i + 1) % n];
+        const ux = b[0] - a[0], uy = b[1] - a[1], vx = c[0] - b[0], vy = c[1] - b[1];
+        const m1 = Math.hypot(ux, uy), m2 = Math.hypot(vx, vy);
+        if (m1 < 1e-12 || m2 < 1e-12) return 180;
+        const cos = Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (m1 * m2)));
+        const deg = Math.acos(cos) * 180 / Math.PI;
+        if (deg > worst) worst = deg;
+      }
+      return worst;
+    },
+
+    /** where the line apexes, meaned over every numbered corner, as a fraction of
+        the corner. 0.5 is the geometric middle; a driver's line sits past it. */
+    apexMean: () => {
+      if (!S.d || !S.corners.length) return 0;
+      const n = S.pts.length;
+      let sum = 0;
+      for (const c of S.corners) {
+        const sg = Math.sign(c.turn) || 1;
+        let best = -Infinity, at = 0;
+        for (let j = 0; j < c.len; j++) {
+          const v = S.d[(c.from + j) % n] * sg;
+          if (v > best) { best = v; at = j; }
+        }
+        sum += c.len > 1 ? at / (c.len - 1) : 0.5;
+      }
+      return sum / S.corners.length;
+    },
     /** how far the racing line actually swings, as a fraction of the half-width —
         published so §03's legend can state it rather than claim it */
     swing: () => {
