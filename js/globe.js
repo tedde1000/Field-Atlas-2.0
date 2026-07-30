@@ -37,52 +37,61 @@
  * way until they stop. See the loop at the bottom.
  * ======================================================================== */
 import { LAND } from '../data/world.js';
+import { PLATE, PLATE_W, PLATE_H, loadPlate } from './earth.js';
 
 const RAD = Math.PI / 180;
 const TAU = Math.PI * 2;
 
 /* ===================================================== THE SUN, AND WHERE IT IS
- * ★ THE LIGHT COMES FROM A FIXED POINT IN SPACE NOW, NOT FROM THE CAMERA.
+ * ★ THE LIGHT IS LOCKED TO THE CAMERA AGAIN, AND THAT IS A DELIBERATE REVERSAL.
  *
- * Theodor: "from a specific point, like a sun. You're never gonna see it, but when
- * the earth rotates, the light isn't gonna change only, like, at the earth —
- * because there's light coming from a specific point."
+ * Theodor: "change the direction the sun comes from, so it's always shining on
+ * the side that's towards me looking at the screen."
  *
- * What was here was a radial gradient at a fixed offset from the centre of the
- * canvas: `SUN = {x: -0.62, y: -0.5, z: 0.6}`, baked once into an offscreen layer
- * and blitted. Being fixed in SCREEN space, it rode along with the camera — the
- * terminator sat in the same corner of the disc forever, so the planet turned and
- * the lit region did not, which is exactly the thing he is describing. It also
- * meant the shading was a soft blob rather than a great circle, which is the note
- * PROMPT.md Task 2 already had against it ("the terminator is not a real
- * terminator … that is probably the thing that stops it looking like a lit
- * sphere").
+ * Session 4 did the opposite, on his instruction at the time, and did it
+ * properly: the sun became a direction in WORLD space at the real subsolar point
+ * for Date.now(), so the terminator sat wherever the Earth's actual day/night
+ * line was and the camera could drift out from under it. That was correct and it
+ * was also the problem — the drift and the per-entry look-ats spend most of their
+ * time over Europe at European evening, so the venue the page was talking about
+ * was frequently on the unlit side. A globe you cannot read is not a better globe
+ * for being astronomically true.
  *
- * So the sun is a direction in WORLD space, the shading is a real Lambert term
- * against the surface normal, and the terminator is wherever those two are
- * perpendicular. The camera drifts; the light does not move with it.
+ * So the light is a direction in CAMERA space and the whole visible face is the
+ * day side, by construction, at every camera angle. What is kept from session 4
+ * is everything that made it look like a sphere rather than a coin: it is still a
+ * real Lambert term against the surface normal, and the terminator is still the
+ * great circle where the two are perpendicular. It is simply a great circle that
+ * the camera carries with it.
  *
- * And since it had to be somewhere, it is where the sun actually is. This is the
- * standard low-precision solar position (NOAA / Astronomical Almanac form, good
- * to about 0.01° for any date this page will ever be open), so the day side of
- * the globe is the part of the Earth that is genuinely in daylight while you are
- * reading. On a page whose whole subject is dates and light, an invented sun
- * angle would have been the one decorative number in it.
+ * ★ IT IS NOT HEAD-ON, AND THAT IS THE WHOLE DIFFERENCE. A light straight down
+ * the camera axis makes every surface normal on the visible hemisphere face it,
+ * which flattens the disc into a bright circle with no form. Offset up and to the
+ * left — the light over the reader's shoulder — the Lambert term still falls off
+ * toward the lower-right limb, so there is a crescent of shadow hugging the outer
+ * fifth of the radius and the eye reads a ball. Below, `terminatorAt` works out
+ * where that crescent starts: with these numbers it is at 0.79 of the radius, so
+ * four fifths of the face is unambiguously lit.
  * ========================================================================= */
-function subsolar(ms) {
-  const n = ms / 86400000 + 2440587.5 - 2451545.0;      // days from J2000.0
-  const L = (280.460 + 0.9856474 * n) * RAD;            // mean longitude
-  const g = (357.528 + 0.9856003 * n) * RAD;            // mean anomaly
-  const lam = L + (1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * RAD;
-  const eps = (23.439 - 4e-7 * n) * RAD;                // obliquity of the ecliptic
-  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
-  const ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
-  // Greenwich mean sidereal time, in degrees, reduced to [0, 360)
-  const gmst = (280.46061837 + 360.98564736629 * n) % 360;
-  let lon = (ra / RAD - gmst) % 360;
-  if (lon > 180) lon -= 360;
-  if (lon < -180) lon += 360;
-  return { lat: dec / RAD, lon };
+const SUN = (() => {
+  const x = -0.44, y = 0.38, z = 0.81;      // left, up, toward the camera
+  const L = Math.hypot(x, y, z);
+  return { x: x / L, y: y / L, z: z / L };
+})();
+
+/**
+ * The fraction of the disc radius inside which nothing can be in shadow —
+ * published as data-sun-lit so the suite can assert the reader's face of the
+ * planet stays lit whatever the camera does.
+ *
+ * Solve L = 0 for the earliest radius it is reachable at. The in-plane part of
+ * the sun has length t and can contribute at most r·t against the surface, so
+ * the terminator first appears where r·t = w·SUN.z with w = √(1−r²); that gives
+ * r = SUN.z / √(t² + SUN.z²), and SUN is a unit vector, so the denominator is 1.
+ * With the current direction that is 0.81 — four fifths of the face, always lit.
+ */
+function terminatorAt() {
+  return SUN.z;
 }
 
 /* How dark the night side gets. Not zero: the globe sits behind body copy at low
@@ -191,57 +200,24 @@ function packRing(pts) {
 const LAND_RINGS = LAND.filter(r => r.length >= 5).map(packRing);
 
 /* ============================================================== THE EARTH PLATE
- * NASA Blue Marble, land + shallow bathymetry, equirectangular, public domain —
- * assets/earth-blue-marble-2048.jpg, carried in the document as #earth-plate so
- * trace/bundle.py can rewrite it to a data: URI for the two .dc.html files. See
- * the comment beside that tag: it MUST stay same-origin or the read below throws
- * and the globe falls back to flat vector land for good.
+ * ★ THE SURFACE IS BAKED IN js/earth.js NOW, AND IT IS NOT A PHOTOGRAPH.
  *
- * ★ IT IS DOWNSAMPLED TO 1024x512 ON PURPOSE, AND THE NUMBER IS NOT ARBITRARY.
+ * What was here read NASA Blue Marble into a 1024x512 buffer and sampled it. The
+ * plate is still 1024x512 and is still sampled exactly the same way — but it is
+ * composed at boot from an elevation raster, hypsometrically tinted and lit by a
+ * fixed north-west cartographer's sun, with the land cover contributing only a
+ * colour cast and the city lights carried in the alpha channel. Read the header
+ * of js/earth.js for why, and for what each of the three sources is used for.
  *
- * The surface raster is at most RASTER_MAX (420) across, so the visible hemisphere
- * gets 420 pixels. Sampling a 2048-wide plate into that is a 2.4x UNDERSAMPLE,
- * and undersampling is the one artefact bilinear filtering cannot help with: every
- * coastline crawls with alias as the planet drifts, which on something rotating at
- * 0.9°/s is the most visible thing on the page. Pre-filtering the plate to one mip
- * level — done by the browser's own scaler, which box-filters — puts 512 texels
- * across those 420 pixels, a mild oversample, and bilinear then lands clean. It
- * also quarters the working set to 2 MB.
+ * ★ 1024x512 IS NOT ARBITRARY, AND IT SURVIVES THE CHANGE UNTOUCHED.
+ *
+ * The surface raster below is at most RASTER_MAX (420) across, so the visible
+ * hemisphere gets 420 pixels. Sampling a 2048-wide plate into that is a 2.4x
+ * UNDERSAMPLE, and undersampling is the one artefact bilinear filtering cannot
+ * help with: every coastline crawls with alias as the planet drifts, which on
+ * something rotating at 0.9°/s is the most visible thing on the page. 512 texels
+ * across those 420 pixels is a mild oversample, and bilinear then lands clean.
  * ========================================================================= */
-const PLATE_W = 1024, PLATE_H = 512;
-const PLATE = { px: null, ready: false, failed: false, waiting: [] };
-
-function loadPlate() {
-  const img = typeof document !== 'undefined' && document.getElementById('earth-plate');
-  if (!img) { PLATE.failed = true; return; }
-
-  const grab = () => {
-    try {
-      const c = document.createElement('canvas');
-      c.width = PLATE_W; c.height = PLATE_H;
-      const g = c.getContext('2d', { willReadFrequently: true });
-      g.imageSmoothingEnabled = true;
-      g.imageSmoothingQuality = 'high';
-      g.drawImage(img, 0, 0, PLATE_W, PLATE_H);
-      PLATE.px = g.getImageData(0, 0, PLATE_W, PLATE_H).data;
-      PLATE.ready = true;
-    } catch {
-      /* a cross-origin or file:// image taints the canvas and getImageData throws.
-         Not fatal and not silent: the globe keeps its vector land and says so. */
-      PLATE.failed = true;
-    }
-    PLATE.waiting.splice(0).forEach(fn => fn());
-  };
-
-  if (img.complete && img.naturalWidth) grab();
-  else {
-    img.addEventListener('load', grab, { once: true });
-    img.addEventListener('error', () => {
-      PLATE.failed = true;
-      PLATE.waiting.splice(0).forEach(fn => fn());
-    }, { once: true });
-  }
-}
 loadPlate();
 
 /* the 20° graticule, packed the same way so it draws through the same loop */
@@ -286,6 +262,32 @@ export function createGlobe(canvas, opts = {}) {
     cam.sLat = Math.sin(p0); cam.cLat = Math.cos(p0);
     // the camera's own unit vector, in the same basis as the packed points
     cam.a = cam.cLat * cam.sLon; cam.b = cam.cLat * cam.cLon; cam.c = cam.sLat;
+  }
+
+  /**
+   * Where the camera-locked sun is standing over the Earth right now — the
+   * subsolar point implied by SUN, in {lat, lon}.
+   *
+   * Nothing in the render needs this: the shading works in camera space and never
+   * leaves it. It exists so the light is FALSIFIABLE from outside the canvas.
+   * There is no DOM inside a canvas, so the only handle a test has on the lighting
+   * is what paint() writes to data-*, and "the lit face follows the camera" is a
+   * claim about the relationship between two published numbers. Publishing the
+   * sun in camera space would be trivially constant and would prove nothing.
+   *
+   * It is the exact inverse of the rotation buildSurface() used to apply the other
+   * way round, back when the sun was the real one: both rotations are pairs of
+   * planar rotations, so each inverts by its own transpose.
+   */
+  function sunWorld() {
+    const sc = cam.cLat * SUN.y + cam.sLat * SUN.z;          // world z, i.e. sin(lat)
+    const SP = cam.cLat * SUN.z - cam.sLat * SUN.y;
+    const sa = SUN.x * cam.cLon + SP * cam.sLon;
+    const sb = SP * cam.cLon - SUN.x * cam.sLon;
+    return {
+      lat: Math.asin(Math.max(-1, Math.min(1, sc))) / RAD,
+      lon: Math.atan2(sa, sb) / RAD,
+    };
   }
 
   /* ------------------------------------------------------------- sizing */
@@ -352,9 +354,9 @@ export function createGlobe(canvas, opts = {}) {
 
   /* ======================================================= THE SURFACE PASS
    * One ImageData, rebuilt each paint: unproject every pixel inside the limb back
-   * to a latitude and longitude, sample the Blue Marble plate there, and multiply
-   * by the Lambert term against a sun that is fixed in WORLD space. That last part
-   * is the whole point — see the note over subsolar() at the top of this file.
+   * to a latitude and longitude, sample the relief plate there, and multiply by
+   * the Lambert term against a sun that is fixed in CAMERA space — see the note
+   * over SUN at the top of this file for why that direction, and not the real one.
    *
    * The maths, per pixel, with the disc centred and v measured upward:
    *
@@ -362,7 +364,14 @@ export function createGlobe(canvas, opts = {}) {
    *   w = √(1−u²−v²)  the third component of the surface normal, toward the camera
    *   lat = asin(w·sinφ₀ + v·cosφ₀)
    *   lon = λ₀ + atan2(u, w·cosφ₀ − v·sinφ₀)
-   *   L   = u·sx + v·sy + w·sz          the Lambert term, sun in camera basis
+   *   L   = u·SUN.x + v·SUN.y + w·SUN.z          the Lambert term
+   *
+   * ★ THE SUN NO LONGER HAS TO BE ROTATED INTO THE CAMERA'S BASIS. It is already
+   * expressed there, which deletes eight multiplies and two trig calls per frame
+   * and — much more to the point — removes the only remaining reason this pass
+   * had to run when nothing had moved. With MOTION off the globe is now genuinely
+   * static; before this, the terminator crept 15°/hour and the still-frame
+   * signature had to carry the subsolar longitude to let it.
    *
    * ★ IT IS RASTERED SMALL AND SCALED UP. See RASTER_MAX. The vector coastline is
    * still stroked over the top at full resolution, which is where the eye actually
@@ -398,15 +407,8 @@ export function createGlobe(canvas, opts = {}) {
     const half = R / 2, inv = 1 / half;
     const { sLat, cLat } = cam;
 
-    /* the sun, rotated into the camera's basis — once per frame, not per pixel */
-    const s = subsolar(Date.now());
-    const sp = s.lat * RAD, sl = s.lon * RAD;
-    const scl = Math.cos(sp);
-    const sa = scl * Math.sin(sl), sb = scl * Math.cos(sl), sc = Math.sin(sp);
-    const SP = sb * cam.cLon + sa * cam.sLon;
-    const sx = sa * cam.cLon - sb * cam.sLon;
-    const sy = cam.cLat * sc - cam.sLat * SP;
-    const sz = cam.sLat * sc + cam.cLat * SP;
+    // the sun, already in the camera's basis — see SUN at the top of this file
+    const sx = SUN.x, sy = SUN.y, sz = SUN.z;
 
     const px = PLATE.px;
     const INV_PI = 1 / Math.PI;
@@ -420,16 +422,27 @@ export function createGlobe(canvas, opts = {}) {
        lost. So the day pass runs a wider lit:unlit ratio (≈11:1 against night's
        ≈10:1 before the opacity is applied) and the CSS opacity is left exactly where
        session 4 set it. */
-    const gain = isDay ? 1.34 : 0.92;
+    const gain = isDay ? 1.30 : 0.95;
     const ambient = isDay ? NIGHT * 1.35 : NIGHT;
+    /* How hard the city lights burn on the shadowed crescent. The day theme holds
+       the whole disc at 34% opacity over warm paper, where a warm glow on a warm
+       ground is just mud, so it gets a third of the night side's. */
+    const lampGain = isDay ? 0.34 : 1.0;
 
     for (let py = 0; py < R; py++) {
       const v = -((py + 0.5) - half) * inv;
       const vv = 1 - v * v;
-      if (vv <= 0) continue;
-      const span = Math.sqrt(vv);
-      const x0 = Math.max(0, Math.ceil(half - span * half - 0.5));
-      const x1 = Math.min(R - 1, Math.floor(half + span * half - 0.5));
+      /* ★ ONE TEXEL PAST THE LIMB, ON PURPOSE — this row bound and the two below
+         are the antialiasing. The old loop tested `w² > 0` and skipped everything
+         else, which gives the disc a hard edge on the RASTER, and the raster is
+         then scaled up by about 1.6x: a stair-stepped limb, plus a dark fringe
+         where the scaler blended opaque pixels against transparent black. That is
+         the most visible artefact the globe had. Every pixel the disc touches is
+         written now, with a coverage alpha, and the edge resolves sub-texel. */
+      if (vv <= -2 * inv) continue;
+      const span = Math.sqrt(Math.max(0, vv));
+      const x0 = Math.max(0, Math.ceil(half - span * half - 1.5));
+      const x1 = Math.min(R - 1, Math.floor(half + span * half + 0.5));
       // the parts of the unprojection that do not vary along the row
       const vLat = v * cLat, vDen = -v * sLat;
       let o = (py * R + x0) * 4;
@@ -437,12 +450,19 @@ export function createGlobe(canvas, opts = {}) {
       for (let pxi = x0; pxi <= x1; pxi++, o += 4) {
         const u = ((pxi + 0.5) - half) * inv;
         const w2 = 1 - u * u - v * v;
-        if (w2 <= 0) continue;
-        const w = Math.sqrt(w2);
+        // outside the limb the normal is edge-on rather than undefined; clamping
+        // w to 0 keeps the unprojection valid right up to the silhouette
+        const w = w2 > 0 ? Math.sqrt(w2) : 0;
+        /* coverage: how far inside the limb this texel sits, in texels, offset so
+           a texel centred exactly ON the limb is half covered. `1 − w²` is `u² +
+           v²`, so its root is the radius — no extra work to get it. */
+        const cov = (1 - Math.sqrt(1 - w2)) / inv + 0.5;
+        if (cov <= 0) continue;
+        const alpha = cov >= 1 ? 255 : cov * 255;
 
         // -- the Lambert term first: a night-side pixel still needs the plate, but
         //    a pixel outside the disc never gets here at all
-        let L = u * sx + v * sy + w * sz;
+        const L = u * sx + v * sy + w * sz;
         /* A hard L>0 cut gives a terminator one pixel wide, and the real one is a
            few hundred kilometres of twilight. Softened over ±0.16 of the cosine,
            which is about 9° of arc — close enough to civil twilight to read right. */
@@ -450,7 +470,7 @@ export function createGlobe(canvas, opts = {}) {
         lit = lit * lit * (3 - 2 * lit);                 // smoothstep
         const shade = ambient + (gain - ambient) * lit;
 
-        let rr, gg, bb;
+        let rr, gg, bb, lamp = 0;
         if (px) {
           /* the inverse orthographic. `vLat` and `vDen` are the v-only halves of
              these two expressions, lifted out of the row; w varies along it and so
@@ -474,10 +494,15 @@ export function createGlobe(canvas, opts = {}) {
           rr = px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11;
           gg = px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11;
           bb = px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11;
+          /* ★ The fourth channel of the plate is not opacity, it is CITY LIGHT —
+             js/earth.js bakes the emission there so both come out of one bilinear
+             fetch. See the header of that file. It is sampled with the same four
+             weights, which costs four multiplies and is why it lives there. */
+          lamp = px[a0 + 3] * w00 + px[b0 + 3] * w10 + px[a1 + 3] * w01 + px[b1 + 3] * w11;
         } else {
-          // the plate has not decoded yet, or could not be read — a plain ocean, so
-          // the disc is never a hole while the image is in flight
-          rr = 18; gg = 52; bb = 70;
+          // the plate has not baked yet, or could not be read — a plain ocean, so
+          // the disc is never a hole while the imagery is in flight
+          rr = 14; gg = 38; bb = 58;
         }
 
         /* Atmosphere on the way out: a fresnel term toward the limb, tinted blue
@@ -487,10 +512,37 @@ export function createGlobe(canvas, opts = {}) {
         const fres = 1 - w;
         const glow = fres * fres * fres * 0.85 * lit;
 
-        out[o]     = rr * shade + 120 * glow;
-        out[o + 1] = gg * shade + 172 * glow;
-        out[o + 2] = bb * shade + 214 * glow;
-        out[o + 3] = 255;
+        /* ★ THE LIGHTS LIVE ON THE CRESCENT, and there is only a crescent because
+           the sun moved to the camera. With the light over the reader's shoulder
+           the shadow is the outer fifth of the disc on the lower right — so the
+           cities come round into view along the terminator, burn through the
+           twilight, and go out again as the drift carries them into full shadow at
+           the limb. That is where they read best on any lit sphere anyway; a fully
+           dark hemisphere just shows them lying flat.
+
+           ★ THEY DO NOT WAIT FOR FULL NIGHT, and they must not. Gated on `lit`,
+           which the terminator drives to zero over ±0.16 of the cosine, the lights
+           only existed inside a band a few pixels wide at the very edge of the disc
+           and were effectively invisible. `dusk` is a second, much wider falloff on
+           the same Lambert term — they start showing while it is still arguably
+           evening, at about 0.6 of the radius, and reach full strength at the limb.
+           Which is exactly what a city looks like from orbit at dusk. */
+        const dusk = L >= 0.30 ? 0 : (L <= -0.10 ? 1 : (0.30 - L) / 0.40);
+        const night = lamp * dusk * dusk * (2 - dusk) * lampGain * 0.0032;
+
+        /* ★ A ±1 LEVEL DITHER, and it is not superstition. The sea runs a smooth
+           ramp from shelf to deep across a third of the disc and the fresnel runs
+           another across the limb; at 8 bits both of those band into visible
+           contour rings, and a rotating planet turns static rings into moving
+           ones. Half a level of ordered noise puts the quantisation below what the
+           eye can lock onto, and the 1.6x upscale that follows low-passes it back
+           out. Cheap: two multiplies, an add and a mask. */
+        const d = (((pxi * 7 + py * 13) & 7) - 3.5) * 0.30;
+
+        out[o]     = rr * shade + 120 * glow + night * 255 + d;
+        out[o + 1] = gg * shade + 172 * glow + night * 202 + d;
+        out[o + 2] = bb * shade + 214 * glow + night * 128 + d;
+        out[o + 3] = alpha;
       }
     }
 
@@ -598,16 +650,23 @@ export function createGlobe(canvas, opts = {}) {
     // -- the atmosphere ring outside the limb
     ctx.drawImage(layers.air, 0, 0, w, h);
 
-    ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.clip();
-
-    /* -- the surface: Blue Marble, lit by the real sun. Rastered small (see
-     *    RASTER_MAX) and scaled up here, which is the one place smoothing is
-     *    wanted — the alternative is visible raster pixels at the limb. */
+    /* -- the surface: shaded relief, lit from over the reader's shoulder.
+     *    Rastered small (see RASTER_MAX) and scaled up here, which is the one
+     *    place smoothing is wanted — the alternative is visible raster texels.
+     *
+     * ★ IT IS DRAWN OUTSIDE THE CLIP, and that is the second half of the limb
+     * fix. Canvas `clip()` is not antialiased in Chrome: clipping to an arc
+     * quantises the silhouette to whole device pixels, so the sub-texel coverage
+     * alpha buildSurface() now writes was being thrown away at exactly the edge
+     * it was computed for. The surface carries its own feathered edge, so it
+     * needs no clip; the vector work below still does, and gets one. */
     const surface = buildSurface(isDay);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(surface, cx - r, cy - r, r * 2, r * 2);
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.clip();
 
     /* -- the coastline, stroked over the imagery.
      *
@@ -754,16 +813,16 @@ export function createGlobe(canvas, opts = {}) {
          budget, forever, with motion off. verify.mjs §8 caught it: the starfield
          sat correctly at 0 Hz while the globe ran at its budget beside it.
          With motion off, paint only when something has genuinely changed. */
-      /* ★ The sun is in the signature, rounded to the whole degree. It has to be:
-         the terminator is real now, so it creeps 15°/hour whether or not the
-         camera is moving, and leaving it out would freeze the lighting at whatever
-         it was when MOTION was switched off. One degree of subsolar longitude is
-         four minutes, so this repaints about fifteen times an hour — static by any
-         measure that matters, and honest about where the daylight is. */
+      /* ★ THE SUN IS OUT OF THE SIGNATURE AGAIN. It had to be in it while the
+         light was fixed in world space: a real terminator creeps 15°/hour whether
+         or not the camera moves, so the still frame had to be allowed to repaint
+         about fifteen times an hour to keep up with it. Locked to the camera the
+         light cannot change unless the camera does, and the camera is already the
+         first two fields — so MOTION off is now a genuinely dead canvas. */
       const sig = state.lon.toFixed(2) + '|' + state.lat.toFixed(2) + '|' +
                   state.dim.toFixed(2) + '|' + state.focus + '|' +
                   document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h +
-                  '|' + Math.round(subsolar(Date.now()).lon) + '|' + (PLATE.ready ? 1 : 0);
+                  '|' + (PLATE.ready ? 1 : 0);
       if (sig === stillSig && !layers.dirty) return;
       stillSig = sig;
     }
@@ -805,16 +864,22 @@ export function createGlobe(canvas, opts = {}) {
     canvas.dataset.lon = state.lon.toFixed(1);
     canvas.dataset.lat = state.lat.toFixed(1);
     canvas.dataset.paints = ++paints;
-    /* ★ The sun, published for the same reason: verify.mjs §10 has to be able to
-       prove the light is fixed in WORLD space, and the only way to do that from
-       outside a canvas is to compare where the sun is against where the camera is
-       and assert the two move independently. `plate` says whether the imagery
-       actually made it in, so a tainted or missing texture fails loudly instead of
-       quietly degrading to the old flat globe. */
-    const sun = subsolar(Date.now());
+    /* ★ The sun, published for the same reason and now asserting the OPPOSITE
+       thing. verify.mjs §12d used to prove the light was fixed in world space by
+       moving the camera and watching these two stay put. The light is locked to
+       the camera now, so the same two fields have to move WITH it, exactly — the
+       sub-solar point implied by a camera-space sun is `sunWorld()` below, and a
+       check that turns the planet and asserts the sun turned by the same amount is
+       the only way to tell "locked to the camera" from "stuck". `plate` says
+       whether the relief actually baked, so a tainted or missing source fails
+       loudly instead of quietly degrading to a flat blue ball. */
+    const sun = sunWorld();
     canvas.dataset.sunLat = sun.lat.toFixed(2);
     canvas.dataset.sunLon = sun.lon.toFixed(2);
+    canvas.dataset.sunLock = 'camera';
+    canvas.dataset.sunLit = terminatorAt().toFixed(3);
     canvas.dataset.plate = PLATE.ready ? 'ready' : (PLATE.failed ? 'failed' : 'loading');
+    canvas.dataset.plateKind = PLATE.detail || '';
 
     paint();
     canvas.dataset.raster = String(surf.size);   // set by paint(), so read it after

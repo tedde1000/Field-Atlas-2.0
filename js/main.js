@@ -12,9 +12,10 @@ import { createStarfield } from './starfield.js';
 import { createGlobe } from './globe.js';
 import { createCircuitFigure } from './circuit.js';
 import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
-         curvature, numberedCorners } from './loop.js';
+         curvature, numberedCorners, cornerRuns } from './loop.js';
 import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
+import { stage3d, mount as mount3d } from './layout3d.js';
 import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS } from './gear.js';
 
 /* ============================================================ small helpers */
@@ -523,12 +524,38 @@ const TRACK_BY_ID = new Map([...VENUES, ...TRACKS].map(p => [p.id, p]));
 const CORNER_CACHE = new Map();
 function layoutCorners(c) {
   const t = c.track || {};
-  if (t.runway || !t.corners) return { pts: null, marks: [] };
+  if (t.runway) return { pts: null, marks: [] };
   if (CORNER_CACHE.has(c.id)) return CORNER_CACHE.get(c.id);
   const pts = circuitPoints(c);
-  const got = (!pts || pts.length < 12)
-    ? { pts: null, marks: [] }
-    : { pts, marks: numberedCorners(pts, curvature(pts), t.corners) };
+  let got = { pts: null, marks: [] };
+  if (pts && pts.length >= 12) {
+    const k = curvature(pts);
+    /* ★ "A number for the corners at EVERY single circuit." Where the data
+       carries a measured count, numberedCorners() keeps exactly that many so the
+       drawing and the spec table agree — that is the whole reason it exists. But
+       a circuit with real geometry and no measured count used to get no numbers
+       at all rather than the ones its own shape obviously has, which is the
+       wrong way round: the count is what should be uncertain, not whether the
+       turns are numbered. So it falls back to the runs themselves. */
+    got = { pts, marks: t.corners ? numberedCorners(pts, k, t.corners) : cornerRuns(pts, k, 6) };
+
+    /* Real corner names, where 1.x recorded them — Gelleråsen has six. Snapped to
+       the nearest NUMBERED corner rather than to the nearest node, so "ESSET"
+       always lands on a turn the table actually counted. Same rule js/circuit.js
+       uses for §03's legend, so the two can never disagree about which turn a
+       name belongs to. */
+    if (c.cornerNames?.length && got.marks.length) {
+      for (const nm of c.cornerNames) {
+        let best = null, bd = Infinity;
+        for (const m of got.marks) {
+          const p = pts[m.i];
+          const dd = (p[0] - nm.x) ** 2 + (p[1] - nm.y) ** 2;
+          if (dd < bd) { bd = dd; best = m; }
+        }
+        if (best && !best.label) best.label = nm.label;
+      }
+    }
+  }
   CORNER_CACHE.set(c.id, got);
   return got;
 }
@@ -543,65 +570,49 @@ function bbox(pts) {
   return { x0, y0, x1, y1, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
 }
 
-/** how far outside the road a numeral reaches, in artboard units */
-function markReach(sw, fs) {
-  const lead = sw * 1.15 + fs * 0.28;            // clear of the road, not floating
-  return { lead, reach: lead + fs * 0.95 };
-}
-
-function cornerMarks(c, sw, fs) {
+/* ★ THE NUMERALS ARE NOT IN THE SVG ANY MORE, and only the apex ticks are.
+ *
+ * Everything a corner mark used to be — a dot on the apex, a leader out of the
+ * turn, and the number at the end of it — was drawn flat into the drawing. That
+ * was right while the drawing was flat. It stops being right the moment the
+ * layout is turned back 56° in space (see js/layout3d.js): a numeral lying on the
+ * ground is foreshortened to two fifths of its height, and past about 70° of tilt
+ * it is a horizontal line. The leader is worse, because it points along the
+ * ground and the whole point of it was to get the number clear of the road.
+ *
+ * So this keeps what genuinely belongs ON the tarmac — the apex tick and the
+ * start/finish bar — and the number itself becomes a real object standing over
+ * its apex on a post, built by stage3d(). What is left here is drawn in the
+ * artboard's own units and knows nothing about the third dimension.
+ */
+function roadMarks(c, sw) {
   const { pts, marks } = layoutCorners(c);
   if (!pts || !marks.length) return '';
   /* Belt and braces after the shapeFrame() NaN: nothing non-finite may reach an
      SVG geometry attribute. `d="MNaN NaN…"` and `r="NaN"` are parse errors Chrome
      logs once per element, and 16 circuits' worth of them buried a real check. */
-  if (!Number.isFinite(sw) || sw <= 0 || !Number.isFinite(fs) || fs <= 0) return '';
+  if (!Number.isFinite(sw) || sw <= 0) return '';
 
-  const { lead, reach } = markReach(sw, fs);
-
-  // the centroid, so a leader can be aimed AWAY from the middle of the circuit as
-  // a fallback when a turn is too gentle for its own normal to be trustworthy
-  let mx = 0, my = 0;
-  for (const p of pts) { mx += p[0]; my += p[1]; }
-  mx /= pts.length; my /= pts.length;
-
-  const n = pts.length;
-  const out = [];
-  marks.forEach((m, idx) => {
-    const p = pts[m.i];
-    const a = pts[(m.i - 3 + n) % n], b = pts[(m.i + 3) % n];
-    const tx = b[0] - a[0], ty = b[1] - a[1];
-    const L = Math.hypot(tx, ty) || 1;
-    let ux = -ty / L, uy = tx / L;               // normal, +ve toward the inside
-    // point it OUTWARD: away from the turn, and away from the centroid if in doubt
-    const sign = Math.sign(m.turn) || (((p[0] - mx) * ux + (p[1] - my) * uy) > 0 ? -1 : 1);
-    ux *= -sign; uy *= -sign;
-
-    const r = (v) => v.toFixed(1);
-    out.push(
-      `<circle class="c-dot" cx="${r(p[0])}" cy="${r(p[1])}" r="${r(sw * 0.42)}"></circle>` +
-      `<path class="c-lead" d="M${r(p[0] + ux * sw * 0.7)} ${r(p[1] + uy * sw * 0.7)}` +
-      `L${r(p[0] + ux * lead)} ${r(p[1] + uy * lead)}" stroke-width="${r(sw * 0.16)}"></path>` +
-      `<text class="c-no" x="${r(p[0] + ux * reach)}" y="${r(p[1] + uy * reach)}" ` +
-      `font-size="${r(fs)}">${idx + 1}</text>`);
-  });
+  const r = (v) => v.toFixed(1);
+  const dots = marks.map(m =>
+    `<circle class="c-dot" cx="${r(pts[m.i][0])}" cy="${r(pts[m.i][1])}" ` +
+    `r="${r(sw * 0.42)}"></circle>`).join('');
 
   /* the start/finish line, struck across the road at the first node — the same
      convention §03's canvas figure uses, so the numbering starts in the same
      place in both */
+  const n = pts.length;
   const p0 = pts[0], p1 = pts[3 % n];
   const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
   const LL = Math.hypot(dx, dy) || 1;
   const gx = -dy / LL, gy = dx / LL;
   const half = sw * 0.62;
   const sf =
-    `<path class="c-sf" d="M${(p0[0] - gx * half).toFixed(1)} ${(p0[1] - gy * half).toFixed(1)}` +
-    `L${(p0[0] + gx * half).toFixed(1)} ${(p0[1] + gy * half).toFixed(1)}" ` +
-    `stroke-width="${(sw * 0.22).toFixed(1)}"></path>` +
-    `<text class="c-sf-t" x="${(p0[0] + gx * (half + fs * 0.8)).toFixed(1)}" ` +
-    `y="${(p0[1] + gy * (half + fs * 0.8)).toFixed(1)}" font-size="${(fs * 0.72).toFixed(1)}">S/F</text>`;
+    `<path class="c-sf" d="M${r(p0[0] - gx * half)} ${r(p0[1] - gy * half)}` +
+    `L${r(p0[0] + gx * half)} ${r(p0[1] + gy * half)}" ` +
+    `stroke-width="${r(sw * 0.22)}"></path>`;
 
-  return `<g class="corners">${sf}${out.join('')}</g>`;
+  return `<g class="corners">${sf}${dots}</g>`;
 }
 
 /** what the numbering on a layout means, said out loud under the drawing */
@@ -621,7 +632,35 @@ function cornerCaption(place) {
   return `${t.corners} CORNERS · NUMBERED FROM S/F`;
 }
 
-/** big version of the traced layout, for the top of a circuit panel */
+/* ★ THE GROUND UNDER THE LAP, AND IT IS NOT DECORATION.
+ *
+ * A closed loop turned back in space is genuinely ambiguous: with nothing else in
+ * the frame the eye has no way to tell a tilted plan from a plan that has simply
+ * been squashed vertically, and the layout reads as a squashed drawing rather
+ * than as a thing lying on the floor. A regular grid resolves it in one glance,
+ * because a regular grid seen in perspective is the one pattern everybody can
+ * read the angle of. 1.x draws one behind its venue map for the same reason.
+ *
+ * Square cells, sized off the SHORT side and then laid across both, so the ground
+ * reads as ground and not as a stretched checkerboard — the drawings run anywhere
+ * from 1:1 to 3:1 and a grid derived per-axis would shear differently on each.
+ */
+function groundGrid(vb) {
+  const step = Math.min(vb.w, vb.h) / 6;
+  const r = (v) => v.toFixed(1);
+  const lines = [];
+  for (let x = Math.ceil(vb.x / step) * step; x < vb.x + vb.w; x += step) {
+    lines.push(`M${r(x)} ${r(vb.y)}V${r(vb.y + vb.h)}`);
+  }
+  for (let y = Math.ceil(vb.y / step) * step; y < vb.y + vb.h; y += step) {
+    lines.push(`M${r(vb.x)} ${r(y)}H${r(vb.x + vb.w)}`);
+  }
+  return `<path class="c-grid" d="${lines.join('')}" stroke-width="${r(step * 0.006)}"></path>` +
+         `<rect class="c-edge" x="${r(vb.x)}" y="${r(vb.y)}" width="${r(vb.w)}" height="${r(vb.h)}"` +
+         ` stroke-width="${r(step * 0.012)}"></rect>`;
+}
+
+/** big version of the traced layout, for the top of a circuit panel — in 3D */
 function bigLayout(place) {
   const c = circuitFor(place);
   if (!c) return `<div class="p-shape p-shape--none mono">NO TRACED GEOMETRY</div>`;
@@ -639,33 +678,42 @@ function bigLayout(place) {
    * Five of the drawn layouts carry a `transform` in the data — a translate/rotate
    * pair — and `art.vb` is the bounding box of the artwork AFTER it. This renderer
    * draws the raw `d` without that transform, so for Siljan, Borås, Piteå, Klippan
-   * and Åsum the path genuinely lies outside its own stated viewBox. Padding that
-   * viewBox therefore did not help: `.p-shape svg` is overflow:visible, so numbers
-   * 1 and 3 simply hung off the bordered box.
+   * and Åsum the path genuinely lies outside its own stated viewBox.
    *
-   * Measuring the flattened points that ARE drawn makes the frame exact, and the
-   * margin is then the reach of a numeral rather than a guessed fraction. */
+   * ★ The margin used to have to clear the corner NUMERALS, which were drawn into
+   * the SVG outside the lap. They stand over the drawing now rather than beside
+   * it — see roadMarks() and js/layout3d.js — so what is left to clear is the
+   * width of the road and a little air, and the drawing gets correspondingly
+   * bigger inside the same box. */
   const { pts, marks } = layoutCorners(c);
   let vb;
-  let fs = 0;
   if (pts && pts.length > 8) {
     const b = bbox(pts);
-    const long = Math.max(b.w, b.h);
-    fs = long / 15;
-    const m = marks.length
-      ? road / 2 + markReach(line, fs).reach + fs * 0.7
-      : road / 2 + long * 0.04;
-    vb = `${(b.x0 - m).toFixed(1)} ${(b.y0 - m).toFixed(1)} ` +
-         `${(b.w + m * 2).toFixed(1)} ${(b.h + m * 2).toFixed(1)}`;
+    const m = road / 2 + Math.max(b.w, b.h) * 0.05;
+    vb = { x: b.x0 - m, y: b.y0 - m, w: b.w + m * 2, h: b.h + m * 2 };
   } else {
-    vb = shapeFrame(c, 0.17).vb;
+    const p = shapeFrame(c, 0.12).vb.split(/\s+/).map(Number);
+    vb = { x: p[0], y: p[1], w: p[2], h: p[3] };
   }
+  const r = (v) => v.toFixed(1);
 
-  return `<div class="p-shape"><svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+  const svg = `<svg viewBox="${r(vb.x)} ${r(vb.y)} ${r(vb.w)} ${r(vb.h)}"
+       preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      ${groundGrid(vb)}
       <path class="road" d="${d}" style="stroke-width:${road.toFixed(2)}"></path>
       <path class="line" d="${d}" style="stroke-width:${line.toFixed(2)}"></path>
-      ${cornerMarks(c, line, fs)}
-    </svg></div>`;
+      ${roadMarks(c, line)}
+    </svg>`;
+
+  /* the numbers, as objects in the scene rather than glyphs in the drawing */
+  const marks3d = (pts && marks.length)
+    ? marks.map((m, i) => ({ no: i + 1, label: m.label || null,
+                             x: pts[m.i][0], y: pts[m.i][1] }))
+    : [];
+
+  return `<div class="p-shape p-shape--3d">
+    ${stage3d(svg, vb, marks3d, `${esc((place.short || place.name).toUpperCase())} · 3D`)}
+  </div>`;
 }
 
 const rowsHtml = (rows) => rows.map(([k, v, est]) =>
@@ -882,8 +930,10 @@ function renderFigure(fig) {
     $('#fig-label').textContent =
       `FIG. 3.1 — RACING LINE, ${o.name.toUpperCase()}`;
     const t = o.track || {};
+    const sv = fig.solve();
     $('#fig-meta').textContent =
-      `${t.lengthM ? nf(t.lengthM) + ' M' : '—'} · ${t.corners ?? '—'} CORNERS · INTEGRATING`;
+      `${t.lengthM ? nf(t.lengthM) + ' M' : '—'} · ${t.corners ?? '—'} CORNERS · ` +
+      `${nf(sv.nodes)} NODES`;
     [...pick.children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === o.id)));
     /* Give the canvas a beat to solve the line before reading its corners back.
        ★ The legend states that the road width is exaggerated. It has to: the line
@@ -903,11 +953,22 @@ function renderFigure(fig) {
       const note = o.cornerNames?.length
         ? 'NAMED CORNERS · FIELD ATLAS 1.x'
         : 'TURNS RANKED FROM THE DRAWN LAYOUT';
+      /* ★ WHICH LINE THIS IS, SAID OUT LOUD. A minimum-curvature line and a
+         minimum-time line look similar and mean different things — one is the
+         biggest circle that fits, the other is where the stopwatch says to go, and
+         only the second has late apexes in it. Where the lap-time stage could not
+         run (no measured length to scale the drawing by, so no metres and no
+         physics) the figure is still honest and says `GEOMETRIC` rather than
+         quietly showing a different line under the same caption. */
+      const s2 = fig.solve();
+      const how = s2.mode === 'lap-time'
+        ? `MINIMUM LAP TIME · ${esc(s2.car)} GRIP + POWER`
+        : 'MINIMUM CURVATURE · NO MEASURED LENGTH TO SCALE BY';
       $('#fig-legend').innerHTML = cs.length
         ? cs.map(c => `<span><b>T${c.no}</b>${c.label ? ` ${esc(c.label)}` : ''}` +
                       `${c.turn != null ? ` · ${c.turn}°` : ''}</span>`).join('')
           + `<span style="color:var(--ink-4)">${note} · ° IS TOTAL HEADING CHANGE` +
-            ` · ROAD WIDTH EXAGGERATED</span>`
+            ` · ${how} · ROAD WIDTH EXAGGERATED</span>`
         : `<span style="color:var(--ink-4)">NO CORNERS — ${esc(o.name.toUpperCase())} IS AN AIR BASE</span>`;
     }, 40);
   };
@@ -1050,6 +1111,10 @@ function boot() {
       const kind = route.slice(0, slash), id = route.slice(slash + 1);
       return kind === 'date' ? datePanel(id) : circuitPanel(id);
     },
+    // the 3D layout needs live handlers, and the panel's HTML is a string — see
+    // the note over createPanel() for why this hook exists rather than doing it
+    // inside show()
+    onAfterRender(body) { mount3d(body); },
   });
 
   document.addEventListener('click', (ev) => {

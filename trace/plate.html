@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Field Atlas 2.0 — the Earth plate, flat</title>
+<!--
+  A dev tool, not part of the site. http://localhost:8766/trace/plate.html
+
+  js/earth.js composes the globe's surface once at boot and hands js/globe.js a
+  1024x512 buffer; from then on the only way to see it is wrapped round a sphere,
+  a fifth of it at a time, under a Lambert term and behind a scrim. That is a
+  terrible way to judge a colour ramp, and an impossible way to find an artefact —
+  a seam at the antimeridian, a hole where a coastline ring did not close, a band
+  of ocean under Antarctica — because the parts of the plate you most need to look
+  at are the parts the sphere hides.
+
+  So this lays the same buffer out flat, at 1:1, with the three stages separated:
+  the finished relief, the city-light channel it carries in alpha, and the land
+  mask the whole composition is built on. Nothing here is imported by index.html.
+-->
+<style>
+  html { background: #14161a; color: #cfd3d8; }
+  body { margin: 0; padding: 18px 20px 40px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  h1 { font-size: 13px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; margin: 0 0 4px; }
+  p { max-width: 78ch; color: #838a93; margin: 0 0 18px; }
+  h2 { font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: #8d949d; margin: 22px 0 6px; font-weight: 500; }
+  canvas { display: block; width: 100%; max-width: 1024px; height: auto; image-rendering: pixelated; border: 1px solid #262a30; }
+  #stat { color: #c9974f; }
+  img { position: absolute; width: 0; height: 0; opacity: 0; }
+  #ball { width: 760px; height: 760px; background: #07080a; border: 1px solid #262a30; }
+  #ball canvas { width: 760px; height: 760px; border: 0; image-rendering: auto; }
+</style>
+</head>
+<body>
+
+<img id="earth-topo" src="../assets/earth-topo-4096.jpg" alt="">
+<img id="earth-plate" src="../assets/earth-blue-marble-2048.jpg" alt="">
+<img id="earth-night" src="../assets/earth-night-2048.png" alt="">
+
+<h1>The Earth plate, flat</h1>
+<p>What <code>js/earth.js</code> hands <code>js/globe.js</code>, laid out at 1:1 instead of
+wrapped round a sphere. <span id="stat">baking…</span></p>
+
+<h2>1 — the relief, as the day side is shaded from</h2>
+<canvas id="c-day" width="1024" height="512"></canvas>
+
+<h2>2 — the alpha channel: city lights, on their own</h2>
+<canvas id="c-night" width="1024" height="512"></canvas>
+
+<h2>3 — the land mask the composition is built on (vector coastlines, not imagery)</h2>
+<canvas id="c-mask" width="1024" height="512"></canvas>
+
+<h2>4 — the same plate on the sphere, whole and centred (?lat=&amp;lon= to aim it)</h2>
+<p>The page only ever shows the disc pushed off the right edge of the viewport, so the
+shadowed crescent — the only place the city lights can appear — is usually off screen.
+This is the whole disc, at the camera the query string asks for.</p>
+<div id="ball"><canvas id="c-ball" width="760" height="760"></canvas></div>
+
+<script type="module">
+import { PLATE, PLATE_W, PLATE_H, loadPlate, _landMask } from '../js/earth.js';
+import { createGlobe } from '../js/globe.js';
+
+const draw = (id, fill) => {
+  const g = document.getElementById(id).getContext('2d');
+  const img = g.createImageData(PLATE_W, PLATE_H);
+  fill(img.data);
+  g.putImageData(img, 0, 0);
+};
+
+const show = () => {
+  const t0 = performance.now();
+  if (!PLATE.ready) {
+    document.getElementById('stat').textContent = 'FAILED — ' + PLATE.detail;
+    return;
+  }
+  const px = PLATE.px;
+  draw('c-day', (d) => {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = px[i]; d[i + 1] = px[i + 1]; d[i + 2] = px[i + 2]; d[i + 3] = 255;
+    }
+  });
+  draw('c-night', (d) => {
+    for (let i = 0; i < d.length; i += 4) {
+      const e = px[i + 3];
+      d[i] = e; d[i + 1] = e * 0.8; d[i + 2] = e * 0.5; d[i + 3] = 255;
+    }
+  });
+  const m = _landMask();
+  draw('c-mask', (d) => {
+    for (let i = 0, o = 0; o < d.length; i++, o += 4) {
+      const v = m[i] * 255;
+      d[o] = v; d[o + 1] = v; d[o + 2] = v; d[o + 3] = 255;
+    }
+  });
+  document.getElementById('stat').textContent =
+    `${PLATE.detail} · ${PLATE_W}x${PLATE_H} · drawn in ${(performance.now() - t0) | 0} ms`;
+};
+
+PLATE.waiting.push(show);
+loadPlate();
+if (PLATE.ready || PLATE.failed) show();
+
+const q = new URLSearchParams(location.search);
+const globe = createGlobe(document.getElementById('c-ball'), {
+  lat: Number(q.get('lat') ?? 45),
+  lon: Number(q.get('lon') ?? 10),
+});
+globe.setMotion(false);          // one still frame, at exactly the camera asked for
+globe.setDim(1);
+globe.resize();
+</script>
+</body>
+</html>

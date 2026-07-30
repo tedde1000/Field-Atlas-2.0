@@ -36,14 +36,18 @@ Then open <http://localhost:8766/>. `.claude/launch.json` carries the same confi
 ```
 index.html               THE MASTER — the shell: chrome, five sections, empty hosts
 assets/tokens.css        every colour and face, night + day side
-assets/app.css           layout, chrome, sections, motion, the panel
-assets/earth-blue-marble-2048.jpg   NASA Blue Marble, public domain — the globe's surface
+assets/app.css           layout, chrome, sections, motion, the panel, the 3D stage
+assets/earth-topo-4096.jpg          global elevation — the SHAPE of the surface
+assets/earth-blue-marble-2048.jpg   NASA Blue Marble — the land-cover COLOUR only
+assets/earth-night-2048.png         NASA Earth at Night — the city LIGHTS only
 js/main.js               data -> DOM, the editorial copy, wiring
-js/globe.js              orthographic Earth on a 2D canvas, lit by the real sun
+js/globe.js              orthographic Earth on a 2D canvas, lit from the camera
+js/earth.js              bakes the three sources into one relief plate, once, at boot
 js/starfield.js          the field behind everything
-js/circuit.js            §03 — particles round a solved racing line
+js/circuit.js            §03 — particles round a lap-time-solved racing line
 js/loop.js               geometry: corner-radius paths, splines, flattening, corners,
-                         and the racing-line solver
+                         resampling, the speed model and the racing-line solver
+js/layout3d.js           the panel's track layout on a plane you can turn
 js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy signal
 js/panel.js              the detail overlay: routing, focus, history
 js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks
@@ -57,10 +61,13 @@ source/                  VENDORED copy of Field Atlas 1.x — see source/README.
 trace/sync-source.py     refresh source/ from 1.x
 trace/extract.py         source/ -> data/
 trace/serve.py           the dev server, with caching off — use this one
+trace/serve.mjs          the same server in Node, for machines with no Python
 trace/bundle.py          js/ + assets/ + data/ + index.html -> the two .dc.html files
 trace/verify.mjs         headless smoke test
 trace/shots.mjs          one PNG per chapter, plus mobile and day side
 trace/shots/             the captures
+trace/plate.html         DEV — the baked Earth plate, laid out flat, plus the sphere
+trace/figure.html        DEV — §03's racing line on its own, one circuit at a time
 PROMPT.md                the brief for the next session (bugs, features, shipping)
 ```
 
@@ -106,43 +113,98 @@ drift into being two different pages.
 | 03 | Anatomy of a Circuit | A **solved** racing line, with the flow paced off its curvature |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
 
-### The globe is a lit satellite sphere, and the sun is the real one
+### The globe is a shaded-relief sphere, lit over the reader's shoulder
 
-`js/globe.js` shades the disc per pixel: unproject each pixel back to a lat/lon,
-sample `assets/earth-blue-marble-2048.jpg`, and multiply by a Lambert term against
-a sun that is **fixed in world space** — so the camera drifts and the terminator
-does not go with it. The subsolar point comes from the standard low-precision solar
-position for `Date.now()`, which means the day side of the globe is the part of the
-Earth actually in daylight while you are reading.
+`js/earth.js` composes the surface **once, at boot**, out of three equirectangular
+sources and hands `js/globe.js` a single 1024×512 RGBA plate: elevation gives the
+shape, tinted hypsometrically and hillshaded by a fixed north-west cartographer's
+sun the way a paper atlas does it; Blue Marble contributes a heavily low-passed
+colour cast and nothing else, so the Sahara stays sand and the taiga stays dark
+without the plate becoming a photograph again; and the alpha channel carries the
+city lights. `js/globe.js` then shades the disc per pixel — unproject, sample,
+Lambert — and the coastline mask under all of it is filled from the same Natural
+Earth vectors the globe strokes on top, not thresholded out of the imagery.
 
-Three things about it are load-bearing:
+The sun is **locked to the camera**, offset up and to the left. Session 4 made it
+the real subsolar point in world space and this reverses that on purpose: the drift
+and the per-entry look-ats spend most of their time over Europe at European
+evening, so the venue the page was talking about was frequently on the unlit side.
+It is still a real Lambert term against a real terminator — just one the camera
+carries with it. Four fifths of the visible face is lit at any angle
+(`data-sun-lit`), and the shadowed crescent at the lower-right limb is where the
+city lights show.
 
-- **The plate must stay same-origin.** The shader reads it back with `getImageData`,
-  and a cross-origin or `file://` image taints the canvas, which throws. `index.html`
-  carries it as `#earth-plate`; `trace/bundle.py` rewrites that `src` to a `data:`
-  URI for the two `.dc.html` files, which is the only reason the standalone globe
-  has a surface at all. verify.mjs §11d asserts both halves of that.
+Five things about it are load-bearing:
+
+- **All three sources must stay same-origin.** The bake reads each back with
+  `getImageData`, and a cross-origin or `file://` image taints the canvas, which
+  throws. `index.html` carries them as `#earth-topo`, `#earth-plate` and
+  `#earth-night`; `trace/bundle.py` rewrites all three `src`s to `data:` URIs for
+  the `.dc.html` files, which is the only reason the standalone globe has a surface
+  at all. verify.mjs §11d asserts every one of them.
+- **The coastline mask is filled on a cylinder, not a rectangle.** Three rings run
+  off one edge of the map and back on at the other, and joining lon +179.9 to
+  −180.0 in raster space draws a chord across the whole plate — which under
+  even-odd filled the band between two of them as land, a white ring right round
+  the Arctic. Longitudes are unwrapped before filling and folded back after.
+- **The city lights are gated on BLUE, not on warmth.** The first extraction tested
+  for warm light on the reasoning that street lighting is sodium — true of the
+  light, false of that image, where Tokyo measures (234,232,232). The backdrop is
+  what is coloured. Getting this backwards threw away the four largest light fields
+  on Earth and rendered a completely dark terminator.
 - **It is rastered small and scaled up** — at most 420px, 200px while the disc is
-  dimmed behind the scrim. The plate is pre-filtered to 1024×512 to match, because
-  sampling 2048 into 420 undersamples and every coastline crawls with alias as the
-  planet turns. The vector coastline is still stroked over the top at full
-  resolution, which is where the eye reads the edges.
+  dimmed behind the scrim — and its limb carries a sub-texel coverage alpha, drawn
+  *outside* the arc clip, because canvas `clip()` is not antialiased in Chrome.
 - **The per-ring land fills are gone.** 892 `Path2D` allocations and `fill()` calls
   per frame paid for the surface pass. Only the batched stroke remains.
 
-### §03 draws a racing line now
+### §03 solves for lap time, not for geometry
 
-It used to draw the traced **centreline** with particles scattered either side of it
-by a random constant, under a caption that had said "RACING LINE" since session 1.
-`racingLine()` in `js/loop.js` solves for the real thing: one lateral offset per
-node inside a corridor the width of the track, relaxed toward minimum curvature and
-clamped to the kerbs. Wide in, apex, wide out, none of it hand-authored.
+It used to draw the traced **centreline**, then (session 5) the **minimum-curvature**
+line — the biggest circle that fits through each corner. Neither is the line a
+driver takes. A minimum-curvature line apexes in the geometric middle; a driver
+turns in late, clips past the middle and straightens early, giving away the entry to
+buy exit speed that is then carried the whole length of the following straight.
 
-It is solved **coarse-to-fine** and has to be — the Laplacian of a dense polyline
-goes as the square of the node spacing, so relaxing against immediate neighbours
-only would need on the order of a thousand sweeps to cross a 28px corridor. The
-corridor is 28px on screen at any zoom, which is roughly six times the real track
-width at a 1 200m lap, and the figure legend says so.
+So `racingLine()` in `js/loop.js` now runs the minimum-curvature relaxation only as
+a starting guess, then **drives** it: a point-mass speed profile (`speedProfile()`,
+forward and backward passes over `√(a_lat/κ)`, twice round because a braking zone
+can begin before the start line) and a coarse-to-fine descent that nudges whole
+apex-sized regions of the line wherever the lap time drops. The late apex is not
+written down anywhere — it falls out. Measured across all 21 circuits with geometry,
+the mean apex moves from **0.29** of the way through a corner to **0.45**, and 91 of
+228 corners end up apexing past 0.55.
+
+Two things make it affordable and one makes it safe. The lap is resampled to
+**1 400 evenly spaced nodes** first, because every solver here assumes even spacing
+and because at the old density an apex was three nodes and could not be placed late
+even in principle. The time test is **windowed** — ±60 nodes with the end speeds
+pinned to the current full-lap answer — since a full lap per trial is fifty million
+operations and a visible stall. And the whole lap is measured once at the end
+against the line it started from: if the refinement did not actually help, the
+minimum-curvature line ships instead and `data-solve` says `curvature` rather than
+`lap-time`, so the figure is conservative rather than wrong.
+
+The vehicle is chosen by lap length — under 2 km is a kart, Gelleråsen is a car —
+and the two genuinely draw different lines, because a kart has more lateral grip and
+a fraction of the power. The corridor is still 28px on screen at any zoom, roughly
+six times the real track width, and the legend still says so.
+
+### The panel's track layout is 3D
+
+`js/layout3d.js`, and it is 1.x's venue map brought across: the layout on a plane
+tilted back 56°, drag to orbit, pinch or scroll to zoom, arrow keys, RESET VIEW, and
+a one-time reveal. There is **no elevation** — `data/atlas.js` has no height in it,
+so banking and gradient would be the only invented numbers on the page.
+
+The corner numbers are the reason it is not just a CSS transform on the old SVG. A
+numeral lying flat on a plane turned back 56° is squashed to two fifths of its
+height and past about 70° is a line, so they come out of the drawing and become
+objects in the scene: each rides a post rising off its own apex and is
+counter-rotated by exactly the stage's rotation, so the post leans and foreshortens
+and the number never does. Crowded corners get taller posts — Gelleråsen has four
+turns inside a fifth of the drawing, and on posts of one height their labels landed
+in an unreadable stack.
 
 ### Corner numbers, and how the count is reconciled
 

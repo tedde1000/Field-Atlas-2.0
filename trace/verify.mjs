@@ -875,10 +875,17 @@ ok(filePage.__errs.filter(e => !/favicon|fonts\.g|net::/i.test(e)).length === 0,
  * into — so if trace/bundle.py ever stops inlining that src as a data: URI, the
  * standalone globe silently loses its surface and falls back to bare coastlines.
  * "Silently" is the problem: every other check in §11 passes either way. */
-ok(await filePage.evaluate(() =>
-    (document.getElementById('earth-plate')?.src || '').startsWith('data:image/')),
-  '★ the standalone inlines the Earth plate as a data: URI',
-  (await filePage.evaluate(() => (document.getElementById('earth-plate')?.src || '').slice(0, 40))));
+/* ★ ALL THREE OF THEM, since session 6. The surface is composed at boot from an
+   elevation raster, the land cover and the city lights (js/earth.js), and each is
+   read back with getImageData — so each is equally capable of tainting the canvas
+   and killing the globe's surface off file://. Checking only the one that used to
+   be there would have passed while the two new ones broke it. */
+const inlined = await filePage.evaluate(() =>
+  ['earth-topo', 'earth-plate', 'earth-night'].map(id => [id,
+    (document.getElementById(id)?.src || '').slice(0, 11)]));
+ok(inlined.every(([, s]) => s.startsWith('data:image')),
+  '★ the standalone inlines all three Earth sources as data: URIs',
+  JSON.stringify(inlined));
 ok(await filePage.evaluate(() => document.getElementById('globe')?.dataset.plate) === 'ready',
   '★ the globe reads the plate off file:// without tainting the canvas',
   await filePage.evaluate(() => document.getElementById('globe')?.dataset.plate));
@@ -957,6 +964,22 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   ok(Number(fig.swing) <= 1.001,
     'and never leaves it', `swing=${fig.swing}`);
 
+  /* -- 12b′ · ★ AND IT IS SOLVED FOR TIME, AT RESOLUTION.
+   *
+   * Session 6, and the two halves are separate claims. `data-nodes` is what the
+   * line was solved at: it was a few dozen to a few hundred, unevenly spaced, and
+   * at that density an apex is three nodes and cannot be placed late even in
+   * principle. `data-solve` says the lap-time stage ran AND beat the
+   * minimum-curvature line it started from — racingLine() falls back and reports
+   * `curvature` if it did not, so this cannot pass on a solve that quietly
+   * degraded. Gelleråsen has both a measured length and a measured corner count,
+   * so it is the case where there is no excuse for the fallback. */
+  ok(Number(fig.nodes) >= 1000,
+    '★ §03 solves the line at a thousand nodes or more', `nodes=${fig.nodes}`);
+  ok(fig.solve === 'lap-time',
+    '★ and solves it for LAP TIME, not for minimum curvature — the late apex',
+    `solve=${fig.solve}`);
+
   /* the figure numbers exactly as many corners as the measured data claims — see
      numberedCorners() in js/loop.js for why that is the reconciliation */
   const gel = [...VENUES, ...TRACKS].find(p => p.id === 'gellerasen');
@@ -976,7 +999,9 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     const road = svg.querySelector('path.road');
     const cs = getComputedStyle(line);
     return {
-      nums: [...svg.querySelectorAll('text.c-no')].map(t => t.textContent.trim()),
+      nums: nums3d(),
+      posts: document.querySelectorAll('#panel .p3d-post').length,
+      stage: !!document.querySelector('#panel .p3d-stage'),
       glow: !!svg.querySelector('path.glow'),
       lineFill: cs.fill,
       lineW: parseFloat(line.style.strokeWidth),
@@ -994,6 +1019,9 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     'and never more of them than the data counts',
     shape ? `${shape.nums.length} vs ${firstTrack.track.corners}` : '');
   ok(shape && shape.sf, 'the layout marks the start/finish line the numbering starts from');
+  ok(shape && shape.stage && shape.posts === shape.nums.length,
+    '★ the layout is a 3D stage, and every number stands on its own post',
+    shape ? `stage=${shape.stage} posts=${shape.posts} numbers=${shape.nums.length}` : '');
   ok(shape && !shape.glow,
     '★ no path.glow — the accent fill inside the lap is gone');
   ok(shape && (shape.lineFill === 'none' || shape.lineFill === 'rgba(0, 0, 0, 0)'),
@@ -1001,6 +1029,38 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   ok(shape && shape.roadW > shape.lineW && shape.lineW > 0,
     '★ the track is wider than a wire, with a darker bed under the line',
     shape ? `line=${shape.lineW} road=${shape.roadW}` : '');
+
+  /* ★ AND IT ACTUALLY TURNS.
+   *
+   * The pose lives in two CSS custom properties, which is what makes a drag cost
+   * two style writes a frame however many corners are on the circuit — and also
+   * what makes it invisible to a test, since there is no way to read a transform
+   * back and know a pointer caused it. js/layout3d.js mirrors the pose onto
+   * data-tilt / data-rot / data-zoom on every apply(), per CONVENTIONS §5.
+   *
+   * Driven through the KEYBOARD rather than the mouse. Both paths go through the
+   * same apply(), and the keyboard one is the accessible one: a control that can
+   * be focused and not operated is worse than one that cannot be reached, so this
+   * check covers the affordance as well as the mechanism. */
+  const pose0 = await page.evaluate(() => {
+    const h = document.querySelector('#panel .p3d');
+    document.querySelector('#panel .p3d-stage').focus();
+    return { ...h.dataset };
+  });
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowUp');
+  await sleep(120);
+  const pose1 = await page.evaluate(() => ({ ...document.querySelector('#panel .p3d').dataset }));
+  ok(Number(pose1.rot) > Number(pose0.rot) && Number(pose1.tilt) > Number(pose0.tilt),
+    '★ the 3D layout orbits from the keyboard',
+    `rot ${pose0.rot}->${pose1.rot}, tilt ${pose0.tilt}->${pose1.tilt}`);
+  await page.evaluate(() => document.querySelector('#panel .p3d-reset').click());
+  await sleep(120);
+  const pose2 = await page.evaluate(() => ({ ...document.querySelector('#panel .p3d').dataset }));
+  ok(pose2.rot === pose0.rot && pose2.tilt === pose0.tilt,
+    'and RESET VIEW puts it back exactly where it started',
+    `${pose2.rot}/${pose2.tilt} vs ${pose0.rot}/${pose0.tilt}`);
+
   await page.keyboard.press('Escape');
   await sleep(400);
 
@@ -1023,11 +1083,17 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     await sleep(240);
     audit.push(await page.evaluate(() => {
       const svg = document.querySelector('#panel .p-shape svg');
+      /* ★ THE NUMERALS LEFT THE SVG IN SESSION 6. They are DOM objects standing on
+         posts over the drawing now, because a numeral lying flat on a plane tilted
+         back 56° is unreadable — see js/layout3d.js. Same numbers, same order,
+         different element: `.p3d-no > span` where it used to be `text.c-no`. */
+      const nums3d = () =>
+        [...document.querySelectorAll('#panel .p3d-no > span')].map(t => t.textContent.trim());
       const rows = [...document.querySelectorAll('#panel .spec .row')];
       const cr = rows.find(r => r.querySelector('.k')?.textContent.trim() === 'CORNERS');
       return {
         id: document.getElementById('panel-title')?.textContent.trim(),
-        drawn: svg ? svg.querySelectorAll('text.c-no').length : 0,
+        drawn: nums3d().length,
         measured: cr ? Number(cr.querySelector('.v').textContent.trim()) : null,
         cap: document.querySelector('#panel .p-cap')?.textContent.replace(/\s+/g, ' ').trim() || '',
       };
@@ -1066,6 +1132,12 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     await sleep(240);
     const bad = await page.evaluate(() => {
       const svg = document.querySelector('#panel .p-shape svg');
+      /* ★ THE NUMERALS LEFT THE SVG IN SESSION 6. They are DOM objects standing on
+         posts over the drawing now, because a numeral lying flat on a plane tilted
+         back 56° is unreadable — see js/layout3d.js. Same numbers, same order,
+         different element: `.p3d-no > span` where it used to be `text.c-no`. */
+      const nums3d = () =>
+        [...document.querySelectorAll('#panel .p3d-no > span')].map(t => t.textContent.trim());
       if (!svg) return null;
       const out = [];
       for (const el of svg.querySelectorAll('*')) {
@@ -1079,27 +1151,33 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
       return { out, w, title: document.getElementById('panel-title')?.textContent.trim() };
     });
     if (bad && (bad.out.length || !(bad.w > 0))) nan.push(`${bad.title}: ${bad.out.join(',') || 'strokeWidth=' + bad.w}`);
-    /* ★ AND EVERY NUMERAL IS INSIDE THE FRAME.
+    /* ★ AND EVERY NUMERAL IS INSIDE THE STAGE.
      *
-     * `.p-shape svg` is overflow:visible, so a numeral placed outside the viewBox
-     * does not clip — it hangs off the bordered box and looks like a mistake, which
+     * This used to assert numerals against the SVG's own box, because
+     * `.p-shape svg` is overflow:visible and a numeral placed outside the viewBox
+     * did not clip — it hung off the bordered box and looked like a mistake, which
      * is exactly what happened while shapeFrame() ignored `pad` for artwork
-     * circuits. Asserted on the RENDERED boxes, in the spirit of §10: where things
-     * actually land, not what the markup says. */
+     * circuits. The numerals are 3D objects now (js/layout3d.js) and the box that
+     * matters is `.p3d-stage`, which DOES clip: a number outside it is not ugly, it
+     * is gone, and a circuit quietly missing four of its turns is the worse
+     * failure. Still asserted on the RENDERED boxes, in the spirit of §10 — where
+     * things actually land, not what the markup says. */
     const spill = await page.evaluate(() => {
-      const svg = document.querySelector('#panel .p-shape svg');
-      if (!svg) return [];
-      const box = svg.getBoundingClientRect();
+      const stage = document.querySelector('#panel .p3d-stage');
+      if (!stage) return [];
+      const box = stage.getBoundingClientRect();
       const out = [];
-      for (const t of svg.querySelectorAll('text.c-no')) {
+      for (const t of document.querySelectorAll('#panel .p3d-no')) {
         const r = t.getBoundingClientRect();
         if (r.width === 0) continue;
         if (r.left < box.left - 1 || r.right > box.right + 1 ||
-            r.top < box.top - 1 || r.bottom > box.bottom + 1) out.push(t.textContent.trim());
+            r.top < box.top - 1 || r.bottom > box.bottom + 1) {
+          out.push(t.querySelector('span')?.textContent.trim() || '?');
+        }
       }
       return out;
     });
-    if (spill.length) nan.push(`${bad?.title}: numbers outside the frame — ${spill.join(',')}`);
+    if (spill.length) nan.push(`${bad?.title}: numbers outside the stage — ${spill.join(',')}`);
     await page.keyboard.press('Escape');
     await sleep(150);
   }
@@ -1107,22 +1185,43 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     '★ no layout emits a NaN attribute, a missing stroke width, or a numeral outside its frame',
     nan.join(' | '));
 
-  /* -- 12d · ★ THE SUN IS FIXED IN WORLD SPACE.
+  /* -- 12d · ★ THE SUN IS LOCKED TO THE CAMERA — THE SAME TWO NUMBERS, THE
+   *            OPPOSITE ASSERTION.
    *
-   * This is the check for "when the earth rotates, the light isn't gonna change
-   * only at the earth, because there's light coming from a specific point." The
-   * old shading was a screen-space gradient, so it moved with the camera by
-   * construction and the terminator never crossed a coastline. The assertion is
-   * therefore comparative: over a window in which the camera turns, the subsolar
-   * point must NOT turn with it. The sun does move — 15°/hour — so the bound is on
-   * how much, not on whether. */
+   * Session 4 made the light a direction in WORLD space at the real subsolar
+   * point, and this check proved it by turning the camera and watching the sun
+   * stay put. Session 6 reversed that on Theodor's instruction — "change the
+   * direction the sun comes from, so it's always shining on the side that's
+   * towards me looking at the screen" — because the drift and the per-entry
+   * look-ats spend most of their time over Europe at European evening, and the
+   * venue the page was talking about was frequently on the unlit side.
+   *
+   * So the invariant flips. `data-sun-lat/lon` still publish the subsolar point,
+   * but it is now the one IMPLIED by a camera-space sun (globe.js sunWorld()), and
+   * it must track the camera one for one. That is the only way to tell "locked to
+   * the camera" from "stuck": a constant would also fail to move with it.
+   *
+   * And the consequence is asserted directly as well. `data-sun-lit` is the
+   * fraction of the disc radius inside which nothing can be in shadow, so a check
+   * on it is a check that the face the reader is looking at stays readable — which
+   * is the actual request, rather than a proxy for it. */
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(1200);
   const g0 = await page.evaluate(() => ({ ...document.getElementById('globe').dataset }));
   ok(g0.plate === 'ready',
-    '★ the globe decoded the Blue Marble plate over http', `plate=${g0.plate}`);
+    '★ the globe baked its relief plate over http', `plate=${g0.plate}`);
+  ok(/relief/.test(g0.plateKind || ''),
+    '★ and the surface is shaded relief, not the satellite composite',
+    `plateKind=${g0.plateKind}`);
+  ok(/lights/.test(g0.plateKind || ''),
+    'with the city lights channel in it', `plateKind=${g0.plateKind}`);
   ok(Number(g0.raster) > 0 && Number(g0.raster) <= 420,
     'the surface raster stays inside its cap', `raster=${g0.raster}`);
+  ok(g0.sunLock === 'camera',
+    '★ the light is locked to the camera', `sunLock=${g0.sunLock}`);
+  ok(Number(g0.sunLit) > 0.75,
+    '★ and at least three quarters of the visible face can never be in shadow',
+    `lit inside ${g0.sunLit} of the radius`);
 
   /* ★ The camera is MOVED, not waited on.
    *
@@ -1143,18 +1242,19 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   const camMoved = Math.hypot(Number(g1.lon) - Number(g0.lon), Number(g1.lat) - Number(g0.lat));
   const sunMoved = Math.hypot(Number(g1.sunLon) - Number(g0.sunLon), Number(g1.sunLat) - Number(g0.sunLat));
   ok(camMoved > 2, 'the camera actually swung across the window', `${camMoved.toFixed(2)}°`);
-  ok(sunMoved < 0.2 && sunMoved < camMoved / 5,
-    '★ the sun does not turn with the camera — the light is fixed in world space',
-    `camera ${camMoved.toFixed(2)}° vs sun ${sunMoved.toFixed(3)}°`);
-  // and it is the real sun, not a constant: ±23.44° is the whole range of declination
-  ok(Math.abs(Number(g1.sunLat)) <= 23.5,
-    'the subsolar latitude is a physically possible declination', `${g1.sunLat}°`);
-  /* the sun is not FROZEN either — 15°/hour is 0.0042°/s, so over the ~4 s this
-     section has been running it must have moved, just not with the camera */
-  ok(sunMoved > 0, 'and it is a live sun, not a baked-in constant', `${sunMoved.toFixed(4)}°`);
+  ok(sunMoved > camMoved * 0.5,
+    '★ the sun turns WITH the camera — the lit face follows the reader',
+    `camera ${camMoved.toFixed(2)}° vs sun ${sunMoved.toFixed(2)}°`);
+  /* ★ Not just "it moved": a sun that happened to drift on its own would pass
+     that. The lit fraction is a fixed property of the direction, so it must be
+     bit-for-bit identical at both ends of a window in which the camera swung 8°.
+     Together the two make "locked" the only explanation. */
+  ok(g1.sunLit === g0.sunLit,
+    'and the lit fraction of the face is unchanged by the swing',
+    `${g0.sunLit} -> ${g1.sunLit}`);
 
   ok(page.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
-    'session-5 changes raise no page errors', page.__errs.join(' | '));
+    'session-6 changes raise no page errors', page.__errs.join(' | '));
   await page.close();
 }
 

@@ -394,6 +394,138 @@ export function numberedCorners(pts, k, target) {
   return kept.sort((a, b) => a.i - b.i);
 }
 
+/* ================================================== EVEN SPACING, FIRST
+ * ★ EVERY SOLVER BELOW ASSUMES THE NODES ARE EVENLY SPACED, AND NOTHING
+ * UPSTREAM WAS GIVING THEM THAT.
+ *
+ * flattenPath() subdivides a Bézier by its control hull and loopSample() by its
+ * chord, so both put many nodes into a tight corner and few along a straight —
+ * sensible for drawing, wrong for everything here. The relaxation below is a
+ * discrete Laplacian, whose strength per sweep goes as the SQUARE of the node
+ * spacing; the curvature estimate is a finite difference over a fixed number of
+ * nodes; the speed profile integrates ds between them. Feed any of those uneven
+ * spacing and they quietly weight the corners differently from the straights,
+ * which is exactly the sort of error that shows up as a line that looks almost
+ * right and is subtly wrong everywhere.
+ *
+ * So the lap is resampled to constant arc length before anything else happens.
+ * `n` is chosen by the caller, and it is chosen high — see the note over
+ * NODES in js/circuit.js.
+ * ==================================================================== */
+export function resampleUniform(pts, n) {
+  const m = pts.length;
+  const seg = new Float64Array(m);
+  let total = 0;
+  for (let i = 0; i < m; i++) {
+    const a = pts[i], b = pts[(i + 1) % m];
+    seg[i] = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    total += seg[i];
+  }
+  const step = total / n;
+  const out = new Array(n);
+  let i = 0, walked = 0;
+  for (let k = 0; k < n; k++) {
+    const want = k * step;
+    while (i < m - 1 && walked + seg[i] < want) { walked += seg[i]; i++; }
+    const t = seg[i] > 1e-12 ? (want - walked) / seg[i] : 0;
+    const a = pts[i], b = pts[(i + 1) % m];
+    out[k] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  }
+  return out;
+}
+
+/* ============================================== CURVATURE, THE REAL ONE
+ * curvature() above reports heading change across a window, which is the right
+ * signal for FINDING corners and is not a curvature: it has units of radians and
+ * depends on the window. Cornering speed needs 1/radius, in units of 1/length.
+ *
+ * The Menger curvature of three points is 4A/(abc) — the reciprocal of the radius
+ * of the circle through them — and taking the three a few nodes apart rather than
+ * adjacent is what keeps it stable, because at 1 500 nodes round a lap three
+ * consecutive points are nearly collinear and the area term is all rounding
+ * error.
+ * ==================================================================== */
+export function menger(P, gap = 3) {
+  const n = P.length, k = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = P[(i - gap + n) % n], b = P[i], c = P[(i + gap) % n];
+    const ab = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const bc = Math.hypot(c[0] - b[0], c[1] - b[1]);
+    const ca = Math.hypot(a[0] - c[0], a[1] - c[1]);
+    const area2 = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+    const den = ab * bc * ca;
+    k[i] = den > 1e-12 ? 2 * area2 / den : 0;
+  }
+  return k;
+}
+
+/* ==================================================== HOW FAST, AND WHERE
+ * ★ A LAP TIME NEEDS A CAR, so here is one, as a point mass with three limits.
+ *
+ * Nothing else on this page invents a number, and this is the one place it has
+ * to: `data/atlas.js` has lap lengths and corner counts and no vehicle in it at
+ * all. These are ordinary published figures for the two things that actually run
+ * at these venues, and they are only ever used to decide the SHAPE of a line —
+ * no time is printed anywhere, and none should be.
+ *
+ *   aLat     how hard it can hold a corner
+ *   aBrake   how hard it can stop
+ *   aPower   how hard it can accelerate — the small one, and the reason a late
+ *            apex is worth anything at all
+ *   vMax     where it stops accelerating
+ *
+ * A kart pulls more lateral g than a Carrera Cup car and has a fraction of the
+ * power, which is why kart lines apex later and squarer than car lines do. That
+ * difference falls straight out of these four numbers.
+ * ==================================================================== */
+export const KART = { aLat: 15.5, aBrake: 13.5, aPower: 5.2, vMax: 29 };
+export const CAR = { aLat: 14.0, aBrake: 14.5, aPower: 6.8, vMax: 62 };
+
+/**
+ * Speed at every node, in metres per second — the classic forward/backward pass.
+ *
+ * Start from what the corner alone allows, v = √(a_lat / κ). Then walk the lap
+ * backwards limiting each node to what can still be shed before the one after it
+ * (braking), and forwards limiting it to what can have been gained since the one
+ * before (power). What is left is the fastest the lap can be driven.
+ *
+ * ★ TWICE ROUND, EACH WAY. The lap is closed, so a braking zone for turn 1 can
+ * begin before the start/finish line — one pass starting at index 0 has no idea
+ * that is coming and leaves the last straight too fast. A second pass carries the
+ * answer back across the seam. Two is enough for any real circuit; the limits are
+ * monotone, so the passes can only ever lower a speed and always converge.
+ */
+export function speedProfile(P, dsMetres, car) {
+  const n = P.length;
+  const k = menger(P, 3);
+  const v = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    v[i] = k[i] > 1e-9 ? Math.min(car.vMax, Math.sqrt(car.aLat / k[i])) : car.vMax;
+  }
+  const dvB = 2 * car.aBrake * dsMetres, dvP = 2 * car.aPower * dsMetres;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let s = n - 1; s >= 0; s--) {
+      const j = (s + 1) % n, lim = Math.sqrt(v[j] * v[j] + dvB);
+      if (v[s] > lim) v[s] = lim;
+    }
+    for (let s = 0; s < n; s++) {
+      const h = (s - 1 + n) % n, lim = Math.sqrt(v[h] * v[h] + dvP);
+      if (v[s] > lim) v[s] = lim;
+    }
+  }
+  return v;
+}
+
+/** seconds to cover `len` nodes from `from`, on the trapezium rule */
+function spanTime(v, dsMetres, from, len, n) {
+  let t = 0;
+  for (let s = 0; s < len; s++) {
+    const i = (from + s) % n, j = (i + 1) % n;
+    t += 2 * dsMetres / (v[i] + v[j]);
+  }
+  return t;
+}
+
 /* ==================================================== THE RACING LINE
  * ★ A CENTRELINE IS NOT A RACING LINE, and §03 used to show the centreline.
  *
@@ -425,7 +557,45 @@ export function numberedCorners(pts, k, target) {
  * halving k, moves the long wavelengths in a handful of sweeps and leaves the
  * fine ones to the tail. Same answer, ~40x fewer sweeps.
  * ================================================================== */
-export function racingLine(pts, halfWidth) {
+/* ★ AND MINIMUM CURVATURE IS STILL NOT THE LINE A DRIVER TAKES.
+ *
+ * Theodor: "the anatomy of a circuit — make a lot more measuring points for the
+ * line to be accurate. It's really weird. Search up how a normal racing line is,
+ * how drivers take lines."
+ *
+ * He is right, and the fault is not resolution — that was only half of it. The
+ * minimum-curvature line apexes in the GEOMETRIC middle of every corner, because
+ * that is the largest circle that fits, and a driver does not do that. They turn
+ * in late, clip the inside past the middle, and straighten early so the throttle
+ * can open sooner: the entry is deliberately given away to buy exit speed, and
+ * the exit speed is then carried for the whole length of the following straight.
+ * A tenth lost at turn-in comes back several times over 500 m later. Through
+ * linked corners the same logic compounds — the earlier turns are sacrificed for
+ * whichever one actually feeds the straight.
+ *
+ * None of that is a shape. It is a consequence of a stopwatch, and it cannot be
+ * had from geometry alone at any resolution, which is why the old figure looked
+ * symmetrical and slightly wrong however many points went into it.
+ *
+ * So the solve is now in two stages. The Laplacian relaxation stays and produces
+ * the minimum-curvature line, which is a good starting guess and nothing more.
+ * Then that line is driven — see speedProfile() — and each node is nudged in
+ * whichever direction makes the LAP TIME shorter, until it stops improving. The
+ * late apex is not written down anywhere in here; it is what falls out.
+ *
+ * ★ THE TIME TEST IS WINDOWED, and it has to be. Evaluating a whole lap for both
+ * directions at every one of ~1 500 nodes, twelve times over, is 50 million-odd
+ * operations and a visible stall every time the reader picks a different circuit.
+ * Moving one node can only change the speed within a braking or acceleration
+ * zone of itself, so the test re-solves ±WINDOW nodes with the speeds at the two
+ * ends pinned to the current full-lap answer. Same decision, a hundredth of the
+ * cost — and the full lap is still checked once at the end, so a refinement that
+ * somehow made the lap slower is thrown away rather than shipped.
+ */
+const WINDOW = 60;          // nodes either side, re-solved for a trial move
+const KGAP = 3;             // curvature stencil half-width, in nodes
+
+export function racingLine(pts, halfWidth, opts = {}) {
   const n = pts.length;
   const nx = new Float64Array(n), ny = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -439,6 +609,7 @@ export function racingLine(pts, halfWidth) {
   const w = Math.max(1e-6, halfWidth);
   const clamp = (v) => (v > w ? w : (v < -w ? -w : v));
 
+  /* ------------------------------------------- stage 1: minimum curvature */
   const scales = [];
   for (let k = Math.max(1, Math.floor(n / 24)); k >= 1; k = Math.floor(k / 2)) scales.push(k);
   if (scales[scales.length - 1] !== 1) scales.push(1);
@@ -469,11 +640,149 @@ export function racingLine(pts, halfWidth) {
     }
   }
 
-  const line = new Array(n);
-  for (let i = 0; i < n; i++) {
-    line[i] = [pts[i][0] + d[i] * nx[i], pts[i][1] + d[i] * ny[i]];
+  /* the centreline and its normals, flat — see the note over the search below:
+     this whole stage has to run without allocating anything */
+  const CX = new Float64Array(n), CY = new Float64Array(n);
+  for (let i = 0; i < n; i++) { CX[i] = pts[i][0]; CY[i] = pts[i][1]; }
+  const build = (off) => {
+    const L = new Array(n);
+    for (let i = 0; i < n; i++) L[i] = [CX[i] + off[i] * nx[i], CY[i] + off[i] * ny[i]];
+    return L;
+  };
+
+  const car = opts.car;
+  const mpu = opts.metresPerUnit;
+  if (!car || !(mpu > 0)) {
+    // no vehicle and no scale — the geometric line is all that can be justified
+    return { line: build(d), d, nx, ny, halfWidth: w, geometric: true };
   }
-  return { line, d, nx, ny, halfWidth: w };
+
+  /* ------------------------------------------------ stage 2: minimum time */
+  const geo = Float64Array.from(d);
+  let line = build(d);
+  const ds = (loopLength(line) / n) * mpu;              // metres between nodes
+  let v = speedProfile(line, ds, car);
+  const t0 = spanTime(v, ds, 0, n, n);                  // the whole lap, once
+
+  const SPAN = 2 * WINDOW + 1;
+  const vw = new Float64Array(SPAN);
+  const dvB = 2 * car.aBrake * ds, dvP = 2 * car.aPower * ds;
+
+  /**
+   * Lap time over the window centred on `c`, with `d` as it currently stands.
+   *
+   * ★ NOT ONE ALLOCATION IN HERE, and that is not premature: the first version
+   * built three little [x, y] arrays per node of the window, which at 121 nodes a
+   * window and seventy thousand windows is twenty-six million throwaway objects
+   * for one circuit. It was not slow because of the arithmetic. Everything below
+   * is scalars over flat typed arrays.
+   */
+  const localTime = (c) => {
+    for (let s = 0; s < SPAN; s++) {
+      const i = (c - WINDOW + s + n * 2) % n;
+      const ia = (i - KGAP + n) % n, ie = (i + KGAP) % n;
+      const ax = CX[ia] + d[ia] * nx[ia], ay = CY[ia] + d[ia] * ny[ia];
+      const bx = CX[i] + d[i] * nx[i], by = CY[i] + d[i] * ny[i];
+      const ex = CX[ie] + d[ie] * nx[ie], ey = CY[ie] + d[ie] * ny[ie];
+      const abx = bx - ax, aby = by - ay, aex = ex - ax, aey = ey - ay;
+      const den = Math.hypot(abx, aby) * Math.hypot(ex - bx, ey - by) * Math.hypot(aex, aey);
+      const k = den > 1e-12 ? 2 * Math.abs(abx * aey - aby * aex) / den : 0;
+      vw[s] = k > 1e-9 ? Math.min(car.vMax, Math.sqrt(car.aLat / k)) : car.vMax;
+    }
+    // pin the ends to the full-lap answer, so the window cannot invent speed it
+    // could never have arrived with, or leave with
+    const v0 = v[(c - WINDOW + n * 2) % n], v1 = v[(c + WINDOW) % n];
+    if (vw[0] > v0) vw[0] = v0;
+    if (vw[SPAN - 1] > v1) vw[SPAN - 1] = v1;
+    for (let s = SPAN - 2; s >= 0; s--) {
+      const lim = Math.sqrt(vw[s + 1] * vw[s + 1] + dvB);
+      if (vw[s] > lim) vw[s] = lim;
+    }
+    for (let s = 1; s < SPAN; s++) {
+      const lim = Math.sqrt(vw[s - 1] * vw[s - 1] + dvP);
+      if (vw[s] > lim) vw[s] = lim;
+    }
+    let t = 0;
+    for (let s = 0; s < SPAN - 1; s++) t += 2 * ds / (vw[s] + vw[s + 1]);
+    return t;
+  };
+
+  /* ★ THE SEARCH MOVES A REGION, NOT A NODE, and that is the difference between
+   * a search that finds late apexes and one that finds nothing.
+   *
+   * Nudging a single node of 1 400 changes the line by a fraction of a millimetre
+   * over a metre and a half of track: the lap time does not measurably move, so
+   * every trial is rejected, and 1 400 rejected trials is a very expensive way to
+   * return the line you started with. Worse, if any of them are accepted the line
+   * gets a one-node spike in it, which the curvature stencil then reads as a
+   * hairpin.
+   *
+   * What actually distinguishes a late apex from a geometric one is where a whole
+   * stretch of road sits — twenty metres of it, not one point. So a trial adds a
+   * raised-cosine bump across ±K nodes, tapering to nothing at both ends so the
+   * line stays smooth by construction and no clamp or re-smoothing is needed
+   * afterwards. It is also a twentieth of the trials, which is what makes the
+   * whole stage affordable at this resolution.
+   */
+  const K = Math.max(6, Math.round(n / 110));
+  const bump = new Float64Array(2 * K + 1);
+  for (let s = 0; s <= 2 * K; s++) bump[s] = 0.5 - 0.5 * Math.cos(Math.PI * s / K);
+  const keep = new Float64Array(2 * K + 1);
+
+  const apply = (c, amp) => {
+    for (let s = 0; s <= 2 * K; s++) {
+      const i = (c - K + s + n * 2) % n;
+      d[i] = clamp(keep[s] + amp * bump[s]);
+    }
+  };
+  const save = (c) => {
+    for (let s = 0; s <= 2 * K; s++) keep[s] = d[(c - K + s + n * 2) % n];
+  };
+  const restore = (c) => {
+    for (let s = 0; s <= 2 * K; s++) d[(c - K + s + n * 2) % n] = keep[s];
+  };
+
+  /* Coarse to fine: the first step is a quarter of the road, which is enough to
+     carry an apex most of the way across a corner in one move; the last is a
+     fortieth, which settles it. The stride is half the bump so neighbouring trial
+     regions overlap and no stretch of road is only ever moved by its own edge. */
+  const stride = Math.max(1, Math.floor(K / 2));
+  for (let stage = 0; stage < 5; stage++) {
+    const step = w * 0.25 * Math.pow(0.55, stage);
+    for (let sweep = 0; sweep < 3; sweep++) {
+      let moved = 0;
+      for (let c = 0; c < n; c += stride) {
+        save(c);
+        let best = localTime(c), pick = 0;
+        for (const amp of [step, -step]) {
+          apply(c, amp);
+          const tt = localTime(c);
+          if (tt < best - 1e-9) { best = tt; pick = amp; }
+          restore(c);
+        }
+        if (pick) { apply(c, pick); moved++; }
+      }
+      /* The window's boundary speeds came from `v`, which a sweep has just made
+         stale. Re-solving here is what stops the descent optimising against its
+         own out-of-date picture of the lap. */
+      line = build(d);
+      v = speedProfile(line, ds, car);
+      if (!moved) break;                    // this step size has nothing left
+    }
+  }
+
+  /* ★ AND CHECK. Descent on a windowed objective is a heuristic — it is not
+     guaranteed to improve the thing it is a proxy for. Measuring the whole lap
+     once, against the line we started from, costs one profile and makes the whole
+     stage safe to have: if it did not help, the minimum-curvature line goes out
+     instead and the figure is merely conservative rather than wrong. */
+  const t1 = spanTime(v, ds, 0, n, n);
+  if (!(t1 < t0)) {
+    return { line: build(geo), d: geo, nx, ny, halfWidth: w, geometric: true,
+             lap: t0, gain: 0 };
+  }
+  return { line, d, nx, ny, halfWidth: w, geometric: false,
+           lap: t1, gain: (t0 - t1) };
 }
 
 /** the closed smooth loop as an SVG `d`, cubic Béziers through every point */

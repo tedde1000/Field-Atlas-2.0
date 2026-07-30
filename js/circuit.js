@@ -31,9 +31,29 @@
  * printed with the number rather than instead of it.
  * ======================================================================== */
 
-import { loopSample, curvature, numberedCorners, racingLine } from './loop.js';
+import { loopSample, curvature, numberedCorners, racingLine, loopLength,
+         resampleUniform, speedProfile, KART, CAR } from './loop.js';
 
 const TAU = Math.PI * 2;
+
+/* ★ HOW MANY MEASURING POINTS THE LAP GETS, AND WHY IT IS THIS MANY.
+ *
+ * Theodor: "make a lot more measuring points for the line to be accurate."
+ *
+ * It was 29 to 72 for a sampled centreline and whatever flattenPath() happened to
+ * emit for a drawing — a few hundred, bunched into the corners. At that density
+ * an apex is three or four nodes, so where the line puts it can only ever land on
+ * one of three or four places, and the difference between a geometric apex and a
+ * late one is smaller than the gap between two nodes. The solver could not have
+ * expressed a late apex even if it had wanted to.
+ *
+ * 1 400 evenly spaced nodes puts one every 0.85 m on a 1 200 m kart lap and every
+ * 1.7 m at Gelleråsen — finer than the width of the kart, so an apex can sit
+ * anywhere it likes and the curvature stencil is reading real geometry rather
+ * than the sampling. Everything downstream is linear or near-linear in the node
+ * count and the whole solve still lands in a few tens of milliseconds, once, when
+ * the reader picks a circuit. */
+const NODES = 1400;
 
 /* the flow is drawn as one path per alpha band rather than one per particle —
    see the note in paint(). ALPHA_MAX is the ceiling of the per-particle alpha
@@ -115,9 +135,25 @@ export function createCircuitFigure(canvas) {
   function solve() {
     if (!S.pts || !S.scale) return;
     S.half = HALF_PX / S.scale;
-    const r = racingLine(S.pts, S.half);
+    /* ★ The vehicle and the scale are what turn this from a geometry solve into a
+     * lap-time solve. Without both, racingLine() falls back to minimum curvature
+     * and says so, which is what happens for a circuit whose length was never
+     * measured — better a conservative line than a confident wrong one. */
+    const r = racingLine(S.pts, S.half, { car: S.car, metresPerUnit: S.mpu });
     S.line = r.line; S.d = r.d; S.nx = r.nx; S.ny = r.ny;
+    S.geometric = r.geometric;
+    S.lap = r.lap || 0; S.gain = r.gain || 0;
     S.rk = curvature(S.line);
+    /* the flow is paced off SPEED now, where it used to be paced off curvature.
+       They agree in a corner and disagree everywhere that matters: a driver is
+       still hard on the brakes where the road has already gone straight, and
+       already accelerating where it has not finished bending. */
+    S.v = (S.mpu && S.car) ? speedProfile(S.line, (loopLength(S.line) / S.line.length) * S.mpu, S.car) : null;
+    if (S.v) {
+      let lo = Infinity, hi = 0;
+      for (const x of S.v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+      S.vLo = lo; S.vHi = Math.max(hi, lo + 1e-6);
+    }
     S.stillKey = null;
   }
 
@@ -137,10 +173,31 @@ export function createCircuitFigure(canvas) {
      * straight chords it gave the ribbon a crease at every sample and made the
      * curvature signal read as spike-and-flat instead of as a corner, which the
      * particles then stuttered through. See js/loop.js. */
-    S.pts = track.dense ? raw.map(p => p.slice(0, 2)) : loopSample(raw, 3.2);
+    const shaped = track.dense ? raw.map(p => p.slice(0, 2)) : loopSample(raw, 3.2);
+    /* ★ AND THEN RESAMPLED, EVENLY, AT NODES POINTS. Both sources above are
+       spaced by drawing convenience — dense in the corners, sparse on the
+       straights — and every solver in js/loop.js assumes otherwise. See the note
+       over resampleUniform() for what uneven spacing quietly does to a Laplacian
+       and to an arc-length integral. */
+    S.pts = resampleUniform(shaped, NODES);
     S.k = curvature(S.pts);
     S.names = track.cornerNames || null;
     S.colour = track.colour || tok('--accent', '#c9974f');
+
+    /* ★ THE SCALE, AND THE VEHICLE. A lap time needs metres and a car; the
+     * artboard has neither. `lengthM` is measured — off the OSM centreline, or off
+     * a recorded 1.x geometry session — so dividing it by the drawn lap's own
+     * length gives metres per artboard unit exactly.
+     *
+     * The vehicle is chosen by lap length, and in this atlas that is not a proxy
+     * for anything, it IS the distinction: every venue here under two kilometres
+     * is a karting circuit and the one over it, Gelleråsen, is the full-size
+     * circuit that runs Kanonloppet. A kart holds more lateral grip and has a
+     * fraction of the power, and both push its apex later — so the two profiles
+     * genuinely draw different lines through the same corner. */
+    const lm = track.track?.lengthM;
+    S.mpu = (lm && !track.track?.runway) ? lm / loopLength(S.pts) : 0;
+    S.car = lm >= 2000 ? CAR : KART;
 
     /* number exactly as many corners as the measured data claims — an air base
        has none, and reports runways instead. See numberedCorners() in loop.js. */
@@ -175,7 +232,13 @@ export function createCircuitFigure(canvas) {
       v: 0.72 + Math.random() * 0.62,      // per-particle pace
       a: 0.14 + Math.random() * 0.6,
     }));
-    S.reveal = 0; S.t0 = performance.now(); S.tPrev = S.t0;
+    /* ★ With motion off the reveal must be OVER, not about to start. Picking a
+       different circuit re-enters here, and starting the clock unconditionally
+       meant the new figure drew instantly and then faded its corner numbers in
+       over a second and a half — with the MOTION pill pressed. See setMotion(). */
+    S.reveal = 0;
+    S.t0 = S.motion ? performance.now() : -1e9;
+    S.tPrev = performance.now();
     fit();
   }
 
@@ -309,14 +372,34 @@ export function createCircuitFigure(canvas) {
          separate neighbouring ninths of that on a 1.25px line. */
       for (let i = 0; i < ALPHA_STEPS; i++) buckets[i] = null;
 
+      /* ★ THE FLOW IS PACED OFF THE SPEED PROFILE NOW, NOT OFF CURVATURE.
+       *
+       * Curvature is where the road bends; speed is how fast anybody is going,
+       * and the two come apart exactly where the figure is interesting. A driver
+       * is still hard on the brakes a hundred metres after the road went straight,
+       * and is already accelerating while it is still bending — that asymmetry
+       * round every corner is the readable difference between a flow field and a
+       * lap, and pacing off |κ| could not show it, because |κ| is symmetric about
+       * the apex by construction.
+       *
+       * `S.v` is the same forward/backward pass the line was solved against, so
+       * the particles are travelling at the speeds the line was chosen for.
+       * Falls back to curvature where there is no measured length to scale by. */
+      const paceAt = S.v
+        ? (i) => 0.26 + 0.74 * ((S.v[i] - S.vLo) / (S.vHi - S.vLo))
+        : (i) => 0.34 + 0.66 / (1 + Math.abs(S.rk[i]) * 11);
+
+      /* ★ IN LAPS PER SECOND, NOT NODES PER FRAME. The node count went from a few
+         hundred to NODES (1 400), and the old constant advanced one node a frame —
+         which would have quietly made the flow three or four times slower on every
+         circuit. A lap is a lap however finely it is cut up. */
+      const perFrame = n * (0.135 / 60);
+      const trail = Math.max(3, Math.round(n * 0.007));
+
       for (const p of S.particles) {
         const i = Math.floor(p.s) % n;
-        /* paced off the RACING LINE's curvature, not the centreline's — that is
-           the whole reading of the figure: a driver on the line is slow at the
-           apex and already accelerating where the centreline is still bending */
-        const kk = Math.abs(S.rk[i]);
-        const speed = p.v * (0.34 + 0.66 / (1 + kk * 11));
-        p.s = (p.s + speed * 0.85 * dt) % n;
+        const pace = paceAt(i);
+        p.s = (p.s + p.v * pace * perFrame * dt) % n;
 
         const a = S.line[i], b = S.line[(i + 3) % n];
         const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -327,12 +410,13 @@ export function createCircuitFigure(canvas) {
 
         const x = (a[0] + nxp) * S.scale + S.ox;
         const y = (a[1] + nyp) * S.scale + S.oy;
-        const j = Math.floor(p.s - speed * 5 + n) % n;
+        // the streak runs BACK along the line, and its length reads as speed
+        const j = (i - Math.round(trail * (0.35 + 0.65 * pace)) + n) % n;
         const c = S.line[j];
         const tx = (c[0] + nxp) * S.scale + S.ox;
         const ty = (c[1] + nyp) * S.scale + S.oy;
 
-        const alpha = p.a * (isDay ? 0.62 : 0.72) * (0.45 + 0.55 * (1 - Math.min(1, kk * 8)));
+        const alpha = p.a * (isDay ? 0.62 : 0.72) * (0.42 + 0.58 * pace);
         let bi = Math.floor(alpha / ALPHA_MAX * ALPHA_STEPS);
         if (bi < 0) bi = 0; else if (bi >= ALPHA_STEPS) bi = ALPHA_STEPS - 1;
         (buckets[bi] || (buckets[bi] = new Path2D())).moveTo(tx, ty);
@@ -449,6 +533,14 @@ export function createCircuitFigure(canvas) {
        reads 0 and any check on this one reads most of the way to 1. */
     canvas.dataset.swing = api.swing().toFixed(3);
     canvas.dataset.corners = String(S.corners.length);
+    /* ★ Published so the suite can tell the two solves apart from outside the
+       canvas. `nodes` is the resolution the line was solved at — the thing that
+       was raised from a few dozen — and `solve` says whether the lap-time stage
+       actually ran and beat the geometric line it started from, which is the only
+       externally visible difference between "a driver's line" and "the biggest
+       circle that fits". */
+    canvas.dataset.nodes = String(S.pts ? S.pts.length : 0);
+    canvas.dataset.solve = S.geometric === false ? 'lap-time' : 'curvature';
   }
   const api = {
     load(track) { load(track); },
@@ -467,7 +559,26 @@ export function createCircuitFigure(canvas) {
       for (let i = 0; i < S.d.length; i++) { const a = Math.abs(S.d[i]); if (a > m) m = a; }
       return m / S.half;
     },
-    setMotion(on) { S.motion = on; },
+    /** how the line was arrived at, for §03's legend to state rather than imply */
+    solve: () => ({
+      nodes: S.pts ? S.pts.length : 0,
+      mode: S.geometric === false ? 'lap-time' : 'curvature',
+      car: S.car === CAR ? 'CAR' : 'KART',
+      scaled: !!S.mpu,
+    }),
+    /* ★ MOTION OFF MUST MEAN FULLY DRAWN, LABELS AND ALL.
+     *
+     * `shown` already jumps to the whole lap with motion off, so the road and the
+     * line appeared at once — but the apex ticks and the corner numbers are held
+     * back on `reveal`, which is a clock rather than a state, and it went on
+     * running. So the figure came up complete and then grew its numbers a second
+     * and a half later: an animation, playing because the pill that turns
+     * animations off had been pressed. Winding the clock back past the end of the
+     * reveal is what makes the still frame actually still. */
+    setMotion(on) {
+      S.motion = on;
+      if (!on) { S.t0 = -1e9; S.stillKey = null; }
+    },
     pause() { S.running = false; },
     resume() { S.running = true; lastPaint = -1e9; },
     destroy() { cancelAnimationFrame(raf); },

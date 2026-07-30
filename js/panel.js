@@ -23,7 +23,20 @@ const FOCUSABLE = [
   'select:not([disabled])', 'textarea:not([disabled])', '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-export function createPanel({ root, onRender }) {
+/**
+ * `onAfterRender(body)` runs every time the panel's HTML is replaced — on open
+ * and on refresh — and is where anything that needs live JS gets attached.
+ *
+ * ★ It exists because onRender() returns a STRING. That is deliberate: a panel
+ * is rebuilt from scratch on every open and on every gear tick, and building it
+ * as one string keeps that rebuild atomic and cheap. But a string cannot carry a
+ * listener, so the 3D track layout — which needs pointer, wheel and key handling
+ * — had nowhere to be wired up. Doing it inside show() would work for opening
+ * and quietly fail on refresh(), which is precisely the bug that shape of code
+ * produces: tick a gear item and the layout stops turning, with nothing in the
+ * console to say why.
+ */
+export function createPanel({ root, onRender, onAfterRender }) {
   const card = root.querySelector('.panel-card');
   const body = root.querySelector('.panel-body');
   const closeBtn = root.querySelector('.panel-close');
@@ -39,6 +52,7 @@ export function createPanel({ root, onRender }) {
     if (html == null) return false;          // unknown id — leave the page alone
 
     body.innerHTML = html;
+    onAfterRender?.(body);
     root.hidden = false;
     root.setAttribute('aria-hidden', 'false');
     // reflow before adding the class so the transition actually runs
@@ -145,7 +159,7 @@ export function createPanel({ root, onRender }) {
       if (!state.open) return;
       const y = body.scrollTop;
       const html = onRender(state.route);
-      if (html != null) { body.innerHTML = html; body.scrollTop = y; }
+      if (html != null) { body.innerHTML = html; onAfterRender?.(body); body.scrollTop = y; }
     },
   };
   return api;

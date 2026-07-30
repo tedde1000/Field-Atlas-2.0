@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Field Atlas 2.0 — §03's racing line, on its own</title>
+<!--
+  A dev tool, not part of the site.
+      http://localhost:8766/trace/figure.html
+      http://localhost:8766/trace/figure.html?id=rasbo
+
+  §03's figure lives most of a page down, behind a scroll reveal and an
+  IntersectionObserver that pauses it when it is off screen. That is all correct
+  for the page and useless for judging a racing line: you cannot get a headless
+  capture of it without driving the scroll, and you cannot compare two circuits
+  without scrolling between them.
+
+  This mounts the same createCircuitFigure() on a bare canvas at a chosen circuit
+  and prints what the solver decided underneath — which line it found, how many
+  nodes it used, and how much lap time the time-optimal stage actually took out
+  of the minimum-curvature line it started from. Nothing here is imported by
+  index.html.
+-->
+<link rel="stylesheet" href="../assets/tokens.css">
+<style>
+  html { background: #0b0d10; }
+  body { margin: 0; padding: 16px 18px 30px; font: 12px/1.55 var(--font-mono, monospace); color: var(--ink-2); }
+  h1 { font-size: 12px; letter-spacing: .2em; text-transform: uppercase; margin: 0 0 10px; color: var(--ink); }
+  #picks { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+  #picks a { padding: 4px 9px; border: 1px solid var(--hairline, #2a2a2a); color: var(--ink-3); text-decoration: none; font-size: 10px; letter-spacing: .1em; }
+  #picks a.on { border-color: var(--accent); color: var(--accent); }
+  #fig { position: relative; width: 1200px; max-width: 100%; height: 560px; border: 1px solid var(--hairline, #2a2a2a); }
+  canvas { width: 100%; height: 100%; display: block; }
+  #out { margin-top: 10px; color: var(--accent); font-size: 11px; letter-spacing: .06em; }
+  #legend { margin-top: 6px; color: var(--ink-4); font-size: 10px; letter-spacing: .1em; }
+</style>
+</head>
+<body>
+<h1>§03 — the racing line, on its own</h1>
+<div id="picks"></div>
+<div id="fig"><canvas id="flow"></canvas></div>
+<div id="out">solving…</div>
+<div id="legend"></div>
+
+<script type="module">
+import { VENUES, TRACKS } from '../data/atlas.js';
+import { createCircuitFigure } from '../js/circuit.js';
+import { layoutPath, flattenPath, loopPath, loopSample, hasRadii } from '../js/loop.js';
+
+/* the same ranking circuitFor()/circuitPoints() use in js/main.js — duplicated
+   rather than exported, because this is a harness and the page should not grow
+   an export surface for the sake of one */
+function circuit(p) {
+  if (p.svg?.d) return { kind: 'art', pts: flattenPath(p.svg.d, 2.2) };
+  const tracks = (p.layout?.layers || []).filter(l => l.k === 'track');
+  if (tracks.length) {
+    const main = tracks.reduce((a, b) => ((b.sw || 0) > (a.sw || 0) ? b : a));
+    return { kind: 'traced', pts: flattenPath(layoutPath(main.pts.map(q => q.slice(0, 3))), 2.2) };
+  }
+  const path = p.track?.path;
+  if (path && path.length >= 8) return { kind: 'sampled', pts: path.map(q => q.slice(0, 2)) };
+  return null;
+}
+
+const all = [...VENUES, ...TRACKS].filter(p => circuit(p) && !p.track?.runway);
+const want = new URLSearchParams(location.search).get('id');
+const place = all.find(p => p.id === want) || all.find(p => p.id === 'gellerasen') || all[0];
+
+document.getElementById('picks').innerHTML = all.map(p =>
+  `<a href="?id=${p.id}"${p.id === place.id ? ' class="on"' : ''}>${p.id}</a>`).join('');
+
+const c = circuit(place);
+const names = (place.layout?.layers || [])
+  .filter(l => l.k === 'label' && !/TRACK|RUNWAY|\d\d\/\d\d/.test(l.text))
+  .map(l => ({ label: l.text, x: l.x, y: l.y }));
+
+const fig = createCircuitFigure(document.getElementById('flow'));
+/* ★ Motion off unless ?flow is asked for. The figure draws itself in over a
+   1.5 s reveal and holds the corner numbers back until it is nine tenths done —
+   which is right on the page and wrong here, because a headless capture lands
+   wherever it lands and a still of a half-drawn figure with no numbers on it
+   looks exactly like a figure whose numbers are broken. Ask for ?flow to watch
+   the particles instead. */
+const still = !new URLSearchParams(location.search).has('flow');
+if (still) fig.setMotion(false);
+fig.resize();
+// the canvas is sized by CSS, so its box is not final on the first pass — the
+// page does the same re-measure in a rAF at boot
+requestAnimationFrame(() => fig.resize());
+fig.load({ id: place.id, name: place.name, track: place.track, colour: place.accent,
+           cornerNames: names, path: c.pts, dense: c.kind !== 'sampled' });
+// after load(), which restarts the reveal clock — the page does the same, in
+// applyMotion() after renderFigure()
+if (still) fig.setMotion(false);
+
+/* read the canvas's own data-* rather than the api, so this reports exactly what
+   trace/verify.mjs would see — the point of a harness is to look at the same
+   surface the tests do, not at a friendlier one */
+setTimeout(() => {
+  const s = fig.solve();
+  const ds = document.getElementById('flow').dataset;
+  document.getElementById('out').textContent =
+    `${place.name} · ${ds.nodes} NODES · SOLVE ${(ds.solve || '?').toUpperCase()} · ` +
+    `${s.car} · ${s.scaled ? 'SCALED TO METRES' : 'NO MEASURED LENGTH'} · ` +
+    `SWING ${ds.swing} · CORNERS ${ds.corners} · PAINTS ${ds.paints}`;
+  document.getElementById('legend').textContent =
+    fig.corners().map(x => `T${x.no}${x.label ? ' ' + x.label : ''} ${x.turn}°`).join('   ');
+}, 2600);
+</script>
+</body>
+</html>

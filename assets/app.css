@@ -164,10 +164,13 @@ a { color: inherit; }
    Removed at Theodor's request: it read as a cursor the reader did not control.
    See the note at the top of js/scroll.js; nothing references #reticle now. */
 
-/* The Earth plate is decoded by js/globe.js, never laid out. Kept in the document
-   rather than built with `new Image()` so the browser fetches it with the rest of
-   the page, and so trace/bundle.py has a src= to rewrite into a data: URI. */
-#earth-plate { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+/* The three Earth sources are decoded by js/earth.js, never laid out. Kept in the
+   document rather than built with `new Image()` so the browser fetches them with
+   the rest of the page, and so trace/bundle.py has a src= to rewrite into a data:
+   URI for each. See the note beside the tags in index.html. */
+#earth-plate, #earth-topo, #earth-night {
+  position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none;
+}
 
 /* ================================================================== LAYOUT */
 main { position: relative; z-index: 3; padding: 0 var(--rail-w); }
@@ -719,6 +722,126 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
   font-family: var(--font-mono); font-weight: 700; letter-spacing: .12em;
   text-anchor: middle; dominant-baseline: central;
 }
+
+/* ======================================================= THE 3D TRACK LAYOUT
+ * The panel's layout on a plane you can turn — see js/layout3d.js for the
+ * transform chain and for why the numerals are DOM objects standing in the scene
+ * rather than text inside the SVG.
+ *
+ * ★ NOTHING IN THE preserve-3d CHAIN MAY FLATTEN IT. `overflow`, `filter`,
+ * `opacity` below 1, `clip-path`, `mask` and `will-change` on any of
+ * .p3d-plane, .p3d-marks or .p3d-mark silently collapse the whole subtree back
+ * into the parent's plane — the posts lie down, the numbers stop billboarding,
+ * and there is no warning anywhere. The clipping belongs on .p3d-stage, which
+ * carries the perspective and is NOT part of the chain. If a post ever renders
+ * flat, look here first.
+ * ====================================================================== */
+.p-shape--3d { padding: clamp(10px, 1.6vw, 16px); }
+
+/* the ground the lap lies on — see groundGrid() in js/main.js for why it is here */
+.p-shape .c-grid { fill: none; stroke: var(--ink); opacity: .1; }
+.p-shape .c-edge { fill: none; stroke: var(--accent); opacity: .22; }
+
+.p3d { display: block; }
+.p3d-stage {
+  position: relative;
+  height: clamp(320px, 52vh, 520px);
+  display: grid; place-items: center;
+  perspective: 1250px;
+  overflow: hidden;                 /* on the perspective box only — see above */
+  background:
+    radial-gradient(120% 90% at 50% 12%, rgba(201,151,79,.05), transparent 62%),
+    var(--inset, rgba(0,0,0,.14));
+  border: 1px solid var(--hairline-soft);
+  cursor: grab;
+  touch-action: none;               /* the drag owns the gesture, not the page */
+  outline-offset: 2px;
+}
+.p3d-stage.is-grabbing { cursor: grabbing; }
+.p3d-stage:focus-visible { outline: 1px solid var(--accent); }
+
+/* ★ THE PLANE IS SIZED PAST THE STAGE, ON PURPOSE. Turning it back 56° squashes
+   everything vertically by cos(56°) ≈ 0.56, so a plane sized to fit the box flat
+   uses barely half the height once it is tilted — the first build drew Gelleråsen
+   as a 200px ribbon in a 460px box. `max-height` still catches the tall circuits
+   before they run out of the stage; the wide ones, which is most of them, take
+   the width. */
+.p3d-plane {
+  position: relative;
+  width: min(96%, 720px);
+  max-height: 96%;
+  transform-style: preserve-3d;
+  /* nudged down before the rotation — in the stage's own space, so it is a
+     straight drop on screen. The posts all rise, so the drawing plus its numbers
+     is top-heavy and a plane centred geometrically reads as sitting high. */
+  transform: translateY(5%) rotateX(var(--tilt)) rotateZ(var(--rot)) scale(var(--zoom));
+}
+/* the ease is only ever on for the reveal and for RESET; a drag must track the
+   finger exactly, and a transition on a dragged transform reads as lag */
+.p3d.is-revealing .p3d-plane { transition: transform .78s cubic-bezier(.2, .8, .25, 1); }
+body.no-motion .p3d .p3d-plane { transition: none; }
+
+.p3d-plane > .p-shape,
+.p3d-plane > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* the drawing is flat ON the plane — it is the ground, not an object on it */
+.p3d-plane svg { display: block; overflow: visible; }
+
+.p3d-marks { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
+.p3d-mark { position: absolute; width: 0; height: 0; transform-style: preserve-3d; }
+
+/* the post: a flat box stood up into +Z about its own bottom edge, so it leans
+   and foreshortens with the stage exactly as a real post would */
+/* --k is the mark's own tier, 1 / 1.66 / 2.32 — see stage3d() for why crowded
+   corners stand taller */
+.p3d-post {
+  position: absolute; left: -0.75px; bottom: 0;
+  width: 1.5px; height: calc(var(--lift) * var(--k, 1));
+  transform-origin: 50% 100%;
+  transform: rotateX(-90deg);
+  background: linear-gradient(to top, rgba(201,151,79,.06), var(--accent));
+  opacity: .65;
+}
+/* the numeral: lifted along +Z, then given back the inverse of the stage's own
+   rotation, so it faces the reader square on at any angle */
+.p3d-no {
+  position: absolute; left: 0; top: 0;
+  transform:
+    translateZ(calc(var(--lift) * var(--k, 1)))
+    rotateZ(calc(-1 * var(--rot)))
+    rotateX(calc(-1 * var(--tilt)))
+    translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--accent);
+  font-family: var(--font-mono); font-weight: 700; font-size: 10.5px;
+  letter-spacing: .08em; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.p3d-no em {
+  font-style: normal; font-size: 7.5px; letter-spacing: .14em;
+  color: var(--ink-3); text-transform: uppercase;
+}
+
+.p3d-tag {
+  position: absolute; left: 12px; top: 11px;
+  font-size: 9px; letter-spacing: .22em; color: var(--ink-4);
+  pointer-events: none;
+}
+.p3d-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-top: 9px;
+}
+.p3d-hint { font-size: 9px; letter-spacing: .16em; color: var(--ink-4); }
+.p3d-reset {
+  background: none; border: 1px solid var(--hairline);
+  border-radius: 4px; padding: 6px 11px;
+  color: var(--ink-2); font-size: 9px; letter-spacing: .14em;
+  cursor: pointer; transition: border-color .3s var(--ease), color .3s var(--ease);
+}
+.p3d-reset:hover { border-color: var(--accent); color: var(--accent); }
 .p-cap { display: flex; justify-content: space-between; gap: 12px; margin-top: 9px; color: var(--ink-4); }
 
 .p-empty { color: var(--ink-3); font-size: 14.5px; max-width: 32rem; }
