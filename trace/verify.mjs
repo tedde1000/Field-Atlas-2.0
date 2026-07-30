@@ -65,6 +65,21 @@ async function open(hash = '', vw = 1440, vh = 900, seed = null) {
   page.on('pageerror', e => page.__errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') page.__errs.push(m.text()); });
   await page.setViewport({ width: vw, height: vh, deviceScaleFactor: 1 });
+  /* ★ PIN prefers-reduced-motion, OR THE SUITE TESTS A DIFFERENT PAGE ON DIFFERENT
+   * MACHINES. Headless Chrome on Windows reports `reduce`; on macOS, where this
+   * file was written, it reports `no-preference` — and js/main.js boots MOTION off
+   * when it is asked to. So on Windows the globe never drifted, §8's repaint-rate
+   * checks measured a deliberately static canvas and read 0.0 Hz, and §4's pill
+   * click turned motion ON while asserting it had turned it off. Two failures and
+   * a pill test running backwards, none of it about the page.
+   *
+   * `no-preference` is the state the suite is written for: every check that wants
+   * motion off clicks the pill to get there, which is also the path a reader takes.
+   * The reduced-motion path itself is asserted through that pill, not through the
+   * host's accessibility settings. */
+  await page.emulateMediaFeatures([
+    { name: 'prefers-reduced-motion', value: 'no-preference' },
+  ]);
   // clear before the page's scripts run, so BASE+hash is the only navigation —
   // visiting BASE first would make the hash a same-document change
   await page.evaluateOnNewDocument((s) => {
@@ -445,22 +460,36 @@ ok(entry.hash === 'date/' + entry.key, 'the entry route round-trips through the 
   `${entry.hash} vs date/${entry.key}`);
 ok(entry.hasPlan, 'the date panel rendered its sections');
 
-/* -- 9e · empty storage renders a real state instead of throwing --
-   this page was opened with localStorage cleared, so there is no evhub.* at
-   all: the fresh-browser case. It must say so and link out to 1.x. */
+/* -- 9e · ★ NO LIVE 1.x DATA IS NOT AN EMPTY PAGE ANY MORE, AND IT SAYS WHICH.
+ *
+ * This page was opened with localStorage cleared, so there is no evhub.* at all:
+ * the fresh-browser case, which in development is EVERY case, since 1.x on :8765
+ * and 2.0 on :8766 are different origins. It used to render an apology and a link
+ * out to 1.x, and the check asserted exactly that — zero rows.
+ *
+ * Session 6 changed the contract on purpose. `KIT_1X` in js/gear.js carries the
+ * inventory recovered from Field-Atlas commit dacef4d, so there is always a real
+ * kit to show; a live `evhub.gear.inventory` still wins outright. What must hold
+ * now is not that the list is EMPTY but that it is HONEST — the page has to say
+ * which of the two it is looking at, or a reader has no way to tell a stale list
+ * from their own. */
 const empty = await p.evaluate(() => {
   const g = document.getElementById('p-gear');
   return {
     present: !!g,
-    empty: !!g?.querySelector('.p-empty'),
-    linksOut: !!g?.querySelector('.p-out[href*="Field-Atlas"]'),
     items: g?.querySelectorAll('.p-item').length ?? -1,
+    src: g?.querySelector('.p-src')?.textContent.trim() || '',
+    ticked: g?.querySelectorAll('.p-item.on').length ?? -1,
   };
 });
-ok(empty.present, 'the packing list section rendered with no gear data');
-ok(empty.empty && empty.linksOut, 'empty storage explains itself and links to 1.x',
+ok(empty.present, 'the packing list section rendered with no live gear data');
+ok(empty.items > 0, '★ and shows the kit recovered from 1.x rather than an empty box',
   JSON.stringify(empty));
-ok(empty.items === 0, 'no gear rows are invented out of an absent inventory');
+ok(/RECOVERED/.test(empty.src) && /NO LIVE 1\.x DATA/.test(empty.src),
+  '★ and says out loud that it is not the live list', empty.src);
+ok(empty.ticked === 0,
+  'nothing is pre-ticked — a recovered inventory is not a packing decision',
+  `${empty.ticked} ticked`);
 ok(p.__errs.filter(e => !/favicon/i.test(e)).length === 0,
   'the panel raised no page errors', p.__errs.join(' | '));
 await p.close();
@@ -995,6 +1024,12 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   const shape = await page.evaluate(() => {
     const svg = document.querySelector('#panel .p-shape svg');
     if (!svg) return null;
+    /* ★ THE NUMERALS LEFT THE SVG IN SESSION 6. They are DOM objects standing on
+       posts over the drawing now, because a numeral lying flat on a plane tilted
+       back 56° is unreadable — see js/layout3d.js. Same numbers, same order,
+       different element: `.p3d-no > span` where it used to be `text.c-no`. */
+    const nums3d = () =>
+      [...document.querySelectorAll('#panel .p3d-no > span')].map(t => t.textContent.trim());
     const line = svg.querySelector('path.line');
     const road = svg.querySelector('path.road');
     const cs = getComputedStyle(line);
@@ -1215,7 +1250,12 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     `plateKind=${g0.plateKind}`);
   ok(/lights/.test(g0.plateKind || ''),
     'with the city lights channel in it', `plateKind=${g0.plateKind}`);
-  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 420,
+  /* ★ 700, raised from 420 in session 6. The cap is what stops the per-pixel pass
+     running away, and it moved because the geometry cache (see GEO in js/globe.js)
+     halved the per-frame cost — not because the budget got looser. The number here
+     tracks RASTER_MAX; if it ever needs raising again, the frame time is what has
+     to have been measured first. */
+  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 700,
     'the surface raster stays inside its cap', `raster=${g0.raster}`);
   ok(g0.sunLock === 'camera',
     '★ the light is locked to the camera', `sunLock=${g0.sunLock}`);
@@ -1314,8 +1354,17 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
 {
   const globe = readFileSync(path.join(HERE, '..', 'js', 'globe.js'), 'utf8');
   const loop = readFileSync(path.join(HERE, '..', 'js', 'loop.js'), 'utf8');
-  ok(/function subsolar/.test(globe) && !/const SUN = \{/.test(globe),
-    'globe.js computes a subsolar point instead of carrying a screen-space SUN');
+  /* ★ REVERSED IN SESSION 6, ON INSTRUCTION. Session 4 replaced a screen-space
+     `SUN = {x,y,z}` with a real subsolar computation, and this asserted the
+     replacement had happened. Session 6 put the light back in camera space —
+     "always shining on the side that's towards me looking at the screen" — so the
+     source-level claim flips with it: there is a SUN direction again, and there is
+     no solar-position code left to drift out of sync with it. §12d asserts the
+     behaviour; this asserts that the two files still say the same thing. */
+  ok(/const SUN = \(\(\) =>/.test(globe) && !/function subsolar/.test(globe),
+    'globe.js carries a camera-space SUN and no leftover solar position');
+  ok(/sunWorld/.test(globe),
+    'and can still report where that light stands over the Earth');
   ok(/racingLine/.test(loop) && /minimum curvature/i.test(loop),
     'loop.js still documents how the racing line is solved');
   const css = readFileSync(path.join(HERE, '..', 'assets', 'app.css'), 'utf8');

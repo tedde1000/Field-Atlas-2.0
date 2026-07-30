@@ -746,7 +746,14 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
 .p3d-stage {
   position: relative;
   height: clamp(320px, 52vh, 520px);
-  display: grid; place-items: center;
+  /* ★ `grid-template: 100% / 100%`, NOT a bare `display: grid`. A default `auto`
+     track is sized by its content, which makes it an INDEFINITE height — and a
+     percentage `max-height` on the item then resolves to `none` and is silently
+     ignored. That is exactly what happened: Uddevalla's plane computed 574px tall
+     inside a 468px stage with `max-height: 78%` sitting there doing nothing, and
+     four corner numbers fell off the bottom. One definite track and the clamp
+     works. */
+  display: grid; grid-template: 100% / 100%; place-items: center;
   perspective: 1250px;
   overflow: hidden;                 /* on the perspective box only — see above */
   background:
@@ -766,15 +773,30 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
    as a 200px ribbon in a 460px box. `max-height` still catches the tall circuits
    before they run out of the stage; the wide ones, which is most of them, take
    the width. */
+/* ★ SIZED TO LEAVE ROOM FOR THE POSTS, NOT JUST FOR THE DRAWING.
+ *
+ * At 96% / 720px the layout itself fitted and its corner numbers did not: the
+ * posts rise off the plane, so the tallest tier at the top of a circuit lands
+ * well above the drawing's own bounding box, and `.p3d-stage` clips. Alviks Ring
+ * lost turn 6, Uddevalla lost 1, 2, 3, 4 and 9, Åsum lost 13 — silently, because
+ * a clipped number does not look wrong, it looks absent. verify.mjs §12c″ now
+ * asserts every numeral lands inside the stage, which is what caught it. */
 .p3d-plane {
   position: relative;
-  width: min(96%, 720px);
-  max-height: 96%;
+  /* 78%, not 88%: the plane is turned −18° about Z as well as tilted, so its
+     bounding box on screen is wider than the plane itself, and a corner number
+     sitting outside the road on the far side then lands past the stage edge.
+     Alviks Ring lost turn 6 by 47px. */
+  width: min(78%, 600px);
+  /* over 100% on purpose: tilting back 56° foreshortens the plane to cos(56°) ≈
+     0.56 of its height, so 118% projects to about two thirds of the stage and
+     leaves the top third for the posts */
+  max-height: 110%;
   transform-style: preserve-3d;
   /* nudged down before the rotation — in the stage's own space, so it is a
      straight drop on screen. The posts all rise, so the drawing plus its numbers
      is top-heavy and a plane centred geometrically reads as sitting high. */
-  transform: translateY(5%) rotateX(var(--tilt)) rotateZ(var(--rot)) scale(var(--zoom));
+  transform: translateY(8%) rotateX(var(--tilt)) rotateZ(var(--rot)) scale(var(--zoom));
 }
 /* the ease is only ever on for the reveal and for RESET; a drag must track the
    finger exactly, and a transition on a dragged transform reads as lag */
@@ -843,6 +865,60 @@ body.no-motion .p3d .p3d-plane { transition: none; }
 }
 .p3d-reset:hover { border-color: var(--accent); color: var(--accent); }
 .p-cap { display: flex; justify-content: space-between; gap: 12px; margin-top: 9px; color: var(--ink-4); }
+
+/* ==================================================================== §05 KIT
+ * The whole inventory, grouped the way Field Atlas 1.x groups it. Deliberately a
+ * list and not a grid of cards: this is a thing you scan for "do I own a 70–200"
+ * and the answer should be one column of names, not a hunt across tiles. See
+ * renderKit() in js/main.js.
+ * ====================================================================== */
+/* ★ IT MAY NOT RUN THE FULL WIDTH, AND THAT IS NOT A TASTE DECISION.
+ *
+ * `#scrim` is a horizontal gradient — solid `--bg` to 24% of the viewport, gone
+ * by 62% — because the globe lives on the right and the type lives on the left.
+ * The first version of this grid was `repeat(auto-fit, minmax(280px, 1fr))` with
+ * no cap, so at 1400px it laid four columns across the whole page and put the
+ * last one directly over a lit continent with no scrim under it at all. Two of
+ * the five categories were unreadable.
+ *
+ * Capped at 760px it stays inside the solid part of the scrim at every width,
+ * and falls to one column on a phone. Anything added to this chapter has to
+ * respect the same bound. */
+.kit {
+  display: grid; gap: clamp(22px, 3vw, 40px);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  max-width: 760px;
+  margin-top: clamp(26px, 4vh, 44px);
+}
+.kit-cat > h3 {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: .2em; text-transform: uppercase; color: var(--accent);
+  margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--hairline-soft);
+}
+.kit-cat > h3 .n { color: var(--ink-4); font-size: 10px; letter-spacing: .06em; }
+.kit-cat ul { list-style: none; margin: 0; padding: 0; }
+.kit-item {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 8px 0; border-bottom: 1px solid var(--hairline-soft);
+  font-size: 14px; color: var(--ink);
+}
+.kit-item:last-child { border-bottom: 0; }
+.kit-item .nm { flex: 1 1 auto; min-width: 0; }
+.kit-item .q { color: var(--ink-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* what he owns is the default and reads as such; the other two are stated */
+.kit-item.is-rental .nm, .kit-item.is-sug .nm { color: var(--ink-2); }
+.kit-item .tag {
+  flex: 0 0 auto; font-size: 8px; letter-spacing: .14em;
+  padding: 2px 5px; border: 1px solid var(--hairline); border-radius: 3px;
+  color: var(--ink-4);
+}
+.kit-item .tag--own { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.kit-item .tag--dim { opacity: .6; }
+.kit-src {
+  margin-top: clamp(24px, 3.5vh, 40px);
+  font-size: 9px; letter-spacing: .16em; color: var(--ink-4);
+}
 
 .p-empty { color: var(--ink-3); font-size: 14.5px; max-width: 32rem; }
 .p-note { font-size: 13.5px; color: var(--ink-4); }

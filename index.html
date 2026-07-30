@@ -15,7 +15,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300..800&display=swap" rel="stylesheet">
 
 <link rel="stylesheet" href="assets/tokens.css?v=502e59e0">
-<link rel="stylesheet" href="assets/app.css?v=8368a3a7">
+<link rel="stylesheet" href="assets/app.css?v=b6c46b7d">
 </head>
 <body>
 
@@ -27,7 +27,7 @@
 <div id="scrim" aria-hidden="true"></div>
 
 <!-- ★ THE EARTH, IN THREE EQUIRECTANGULAR SOURCES. js/earth.js reads all three
-     back with getImageData at boot and bakes them into ONE 1024x512 plate that
+     back with getImageData at boot and bakes them into ONE 2048x1024 plate that
      js/globe.js then samples per pixel of the disc. Read the header of
      js/earth.js for what each is used for — they are not interchangeable, and
      only the first one carries any of the planet's SHAPE.
@@ -39,11 +39,11 @@
      for the two .dc.html files, which run off file:// where even a relative path
      counts as cross-origin. Never point any of these at a CDN. -->
 <img id="earth-topo" alt="" aria-hidden="true" decoding="async"
-     src="assets/earth-topo-4096.jpg?v=1">
+     src="assets/earth-topo-4096.jpg?v=9f5d717d">
 <img id="earth-plate" alt="" aria-hidden="true" decoding="async"
      src="assets/earth-blue-marble-2048.jpg?v=5eb3c4cc">
 <img id="earth-night" alt="" aria-hidden="true" decoding="async"
-     src="assets/earth-night-2048.png?v=1">
+     src="assets/earth-night-2048.png?v=7553dd60">
 
 <header class="topbar">
   <a class="brand" href="#overture">
@@ -178,6 +178,25 @@
     </div>
   </section>
 
+  <!-- ============================================ 05 · THE KIT ============= -->
+  <section id="kit" data-chapter="05" data-title="THE KIT">
+    <div class="wrap">
+      <div class="chapter-head" data-reveal>
+        <div class="row">
+          <div class="mono"><span class="n">05</span><span class="t">THE KIT</span></div>
+          <div class="mono sub" id="kit-sub">EQUIPMENT · FIELD ATLAS 1.x</div>
+        </div>
+        <hr>
+      </div>
+      <div data-reveal>
+        <p class="rise" style="max-width:var(--measure);color:var(--ink-2)" id="kit-lede"></p>
+        <!-- built by renderKit() in js/main.js -->
+        <div class="kit" id="kit-grid"></div>
+        <div class="kit-src mono rise" id="kit-src"></div>
+      </div>
+    </div>
+  </section>
+
   <footer>
     <div class="wrap">
       <div class="foot-grid">
@@ -201,6 +220,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=7dfa8047"></script>
+<script type="module" src="js/main.js?v=761d0c30"></script>
 </body>
 </html>

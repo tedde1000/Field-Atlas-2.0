@@ -47,13 +47,24 @@ const TAU = Math.PI * 2;
  * late one is smaller than the gap between two nodes. The solver could not have
  * expressed a late apex even if it had wanted to.
  *
- * 1 400 evenly spaced nodes puts one every 0.85 m on a 1 200 m kart lap and every
- * 1.7 m at Gelleråsen — finer than the width of the kart, so an apex can sit
- * anywhere it likes and the curvature stencil is reading real geometry rather
- * than the sampling. Everything downstream is linear or near-linear in the node
- * count and the whole solve still lands in a few tens of milliseconds, once, when
- * the reader picks a circuit. */
-const NODES = 1400;
+ * ★ 2 600, raised from 1 400 — "much tighter and denser measuring points."
+ *
+ * That puts one node every 0.46 m on a 1 200 m kart lap and every 0.9 m at
+ * Gelleråsen: finer than the kart is wide, so an apex can sit anywhere it likes,
+ * and the curvature stencil is reading real geometry rather than the sampling.
+ *
+ * It is also the second half of the fix for a line that read as too sharp — the
+ * first being the smoothing folded into the solver, see racingLine(). Whatever
+ * kink survives is now spread over twice as many nodes, so the same lateral
+ * movement is drawn with half the angle at each joint.
+ *
+ * ★ EVERYTHING THAT MEASURES A DISTANCE IN NODES SCALES WITH IT. relWindow() and
+ * relGap() in js/loop.js, the bump width K, the stride, and the flow's advance
+ * and streak length below are all fractions of the lap, not counts — raising this
+ * number silently changed the meaning of every one of them the first time. The
+ * whole solve still lands in about a tenth of a second, once, when the reader
+ * picks a circuit. */
+const NODES = 2600;
 
 /* the flow is drawn as one path per alpha band rather than one per particle —
    see the note in paint(). ALPHA_MAX is the ceiling of the per-particle alpha

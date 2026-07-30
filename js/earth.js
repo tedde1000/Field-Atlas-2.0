@@ -19,7 +19,7 @@
  * way a paper atlas does it. That is a drawing rather than a photograph, which
  * is what this page is, and it gives the terrain the shadows the sphere needs.
  *
- * It is composed here, at boot, into ONE 1024x512 RGBA plate:
+ * It is composed here, at boot, into ONE 2048x1024 RGBA plate:
  *
  *     R G B   the relief, day side          (hypsometric tint x hillshade,
  *                                            land-cover chroma, sea by depth)
@@ -49,7 +49,22 @@
  * ======================================================================== */
 import { LAND } from '../data/world.js';
 
-export const PLATE_W = 1024, PLATE_H = 512;
+/* ★ 2048x1024, DOUBLED FROM 1024x512 — see RASTER_MAX in js/globe.js.
+ *
+ * The plate's width is what caps how sharp the disc can ever be: the visible
+ * hemisphere gets half of it, so 1024 texels across a 700-pixel raster is a
+ * comfortable oversample where 512 was a 1.4x UNDERSAMPLE and blurred the terrain
+ * before the raster's own upscale got to it. Four times the texels, 8 MB, and one
+ * pass at boot.
+ *
+ * ★ EVERYTHING BELOW THAT MEASURES A DISTANCE IN TEXELS SCALES WITH `SCALE`.
+ * The blur radii, the relief exaggeration and the sharpening radius are all
+ * tuned in texels, and every one of them means something different at a
+ * different resolution — a gradient across one texel is half as steep on a plate
+ * twice as wide, so a hillshade that is not scaled quietly goes flat. Doubling
+ * the plate without this made the relief look like it had been switched off. */
+export const PLATE_W = 2048, PLATE_H = 1024;
+const SCALE = PLATE_W / 1024;
 
 /* The finished plate, and the flags the globe reports through data-plate.
    `detail` names which source failed, because "the globe went flat" with no
@@ -118,11 +133,11 @@ function ramp(stops, t) {
 }
 
 /* ========================================================== reading a source
- * Every source is decoded into a 1024x512 (or smaller) RGBA buffer through a
+ * Every source is decoded into a 2048x1024 (or smaller) RGBA buffer through a
  * canvas, because that is the only way to get pixels out of an <img>.
  *
  * ★ imageSmoothingQuality:'high' is doing real work here, not decoration. The
- * elevation source is 4096 wide and lands at 1024 — a 4x reduction, which the
+ * elevation source is 4096 wide and lands at 2048 — a 2x reduction, which the
  * browser's high-quality path box-filters properly and the default path does
  * not. A nearest-ish reduction of an elevation map is the single easiest way to
  * get a hillshade full of JPEG block edges, and blocky shadows on a rotating
@@ -291,6 +306,30 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
     elev[i] = (topoPx[o] + topoPx[o + 1] + topoPx[o + 2]) / 765;
   }
 
+  /* ★ AN UNSHARP MASK ON THE ELEVATION, WHICH IS WHERE SHARPNESS ACTUALLY COMES
+   * FROM ON THIS PLATE.
+   *
+   * Theodor: "make the globe a bit more sharp, I feel like it's a bit blurry."
+   *
+   * Raising the raster and the plate fixes the resampling, and it does not fix
+   * this: the elevation source is a JPEG that has been through a 4x box-filtered
+   * reduction, so its ridges arrive with soft shoulders. The hillshade is a
+   * DERIVATIVE of that field, and the derivative of a blurred edge is a wide low
+   * bump where the eye wants a narrow bright one — every mountain range comes out
+   * as a smudge no matter how many pixels it is drawn into.
+   *
+   * Subtracting a blurred copy puts the shoulders back. Done on the elevation
+   * rather than on the finished colour on purpose: it sharpens the SHAPE, so the
+   * hillshade and the hypsometric tint both come out crisp and consistent, where
+   * sharpening the output would just crawl along the coastlines. Radius and amount
+   * are conservative — this is a relief map, not a phone camera. */
+  {
+    const soft = blurField(elev, Math.round(1.5 * SCALE), 2);
+    for (let i = 0; i < N; i++) {
+      elev[i] = clamp01(elev[i] + (elev[i] - soft[i]) * 0.85);
+    }
+  }
+
   const mask = buildLandMask();
 
   /* ★ NORMALISED AGAINST THE LAND'S OWN HISTOGRAM, NOT AGAINST 0..255.
@@ -320,14 +359,14 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
   const eSpan = 1 / (eHi - eLo);
 
   /* -- the sea's depth field: distance from land, smoothed until it is smooth.
-        Blurred at radius 9 three times over, which at 1024x512 reaches roughly
+        Blurred at radius 7·SCALE three times over, which reaches roughly
         1 500 km — about the width of a real continental margin, and far wider
         than any feature that could show as a step. */
-  const shelf = blurField(mask, 7, 3);
+  const shelf = blurField(mask, Math.round(7 * SCALE), 3);
 
   /* ★ THE CITY LIGHTS ARE BLOOMED, AND WITHOUT IT THEY DO NOT SURVIVE THE TRIP.
    *
-   * Extracted straight, a city is one to three texels of the 1024x512 plate. That
+   * Extracted straight, a city is a handful of texels of the plate. That
    * is fine anywhere on the disc except the one place they are ever visible: the
    * shadowed crescent hugs the limb, and the limb is where an orthographic sphere
    * compresses a whole hemisphere's worth of texels into a few pixels. Bilinear
@@ -345,9 +384,9 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
   if (nightPx) {
     const raw = new Float32Array(N);
     for (let i = 0, o = 0; i < N; i++, o += 4) raw[i] = emission(nightPx, o);
-    const soft = blurField(raw, 2, 2);
+    const soft = blurField(raw, Math.round(2 * SCALE), 2);
     lamps = new Float32Array(N);
-    for (let i = 0; i < N; i++) lamps[i] = Math.min(255, raw[i] * 0.55 + soft[i] * 3.2);
+    for (let i = 0; i < N; i++) lamps[i] = Math.min(255, raw[i] * 0.55 + soft[i] * 3.2 * SCALE);
   }
 
   /* -- LAND-COVER CHROMA, and the resolution is the point ------------------
@@ -393,7 +432,7 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
    * into a field of black and white noise. The cosine is floored at 0.35, which
    * caps the gain just under 3x — enough that Scandinavian and Siberian relief
    * still reads, nowhere near enough to shatter the ice sheets. */
-  const EXAG = 18;
+  const EXAG = 18 * SCALE;
 
   for (let y = 0; y < H; y++) {
     const lat = 90 - (y + 0.5) / H * 180;
@@ -440,19 +479,28 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
         const nl = 1 / Math.sqrt(dzdx * dzdx + dzdy * dzdy + 1);
         // dot(normal, light); normal = (-dzdx, -dzdy, 1) normalised
         const lam = (-dzdx * LX - dzdy * LY + LZ) * nl;
-        // 0.70..1.09 rather than 0..1: a relief map has no true shadow, it has
-        // a slope-dependent lightening and darkening about the flat value. The
-        // ceiling is under 1 because this disc sits behind the hero's body copy
-        // and the type has to win.
-        const shade = 0.70 + 0.39 * clamp01(lam * 1.15);
+        /* 0.66..1.12 rather than 0..1: a relief map has no true shadow, it has a
+           slope-dependent lightening and darkening about the flat value. Widened
+           from 0.70..1.09 along with the unsharp mask above — the two together are
+           what put definition back into the terrain — while the ceiling stays near
+           1 because this disc sits behind the hero's body copy and the type has to
+           win. */
+        const shade = 0.66 + 0.46 * clamp01(lam * 1.15);
 
         /* Transfer only the source's COLOUR RATIOS, never its brightness — the
            lightness of every land texel stays the hypsometric tint's, so the
            relief keeps its structure and only the hue moves. Above the snow
            line the transfer fades out: satellite white over ramp white is the
            one place this can only lose information. */
+        /* ★ TURNED DOWN FROM 0.46. Theodor, on the finished globe: "I'm thinking
+           satellite's maybe not the best." He is right that this is the one part
+           of the plate that comes from a photograph, and it earns its place only
+           for the thing the elevation cannot know — that the Sahara is sand and
+           the taiga is dark. A third is enough for that. Past it the cast starts
+           doing the drawing, and the relief map starts looking like a soft
+           satellite composite again, which is what he is reacting to. */
         const cl = (cr + cg + cb) / 3 + 1;
-        const w = 0.46 * (1 - smoothstep(0.66, 0.88, h));
+        const w = 0.33 * (1 - smoothstep(0.66, 0.88, h));
         const mix = (base, c) => base * (1 - w) + base * (c / cl) * w;
 
         r = mix(hr, cr) * shade;
@@ -554,7 +602,7 @@ export function loadPlate() {
   Promise.all([whenReady(topo), whenReady(bm), whenReady(night)]).then(([t, m, n]) => {
     if (!t) { PLATE.failed = true; PLATE.detail = 'no elevation source'; finish(); return; }
     try {
-      const BM_W = 256, BM_H = 128;             // see chroma() — the low-pass IS the point
+      const BM_W = 384, BM_H = 192;             // see chroma() — the low-pass IS the point
       const topoPx = readImage(t, PLATE_W, PLATE_H);
       const bmPx = m ? readImage(m, BM_W, BM_H) : new Uint8ClampedArray(BM_W * BM_H * 4).fill(128);
       const nightPx = n ? readImage(n, PLATE_W, PLATE_H) : null;

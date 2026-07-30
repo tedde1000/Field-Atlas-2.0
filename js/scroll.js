@@ -78,18 +78,34 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
       hero.style.filter = b >= 1 ? `blur(${b}px)` : '';
     }
 
-    /* ---- globe: falls away with the hero, then hangs back as a presence ---- */
+    /* ---- globe: falls away with the hero, then hangs back as a presence ----
+     *
+     * ★ THE OPACITY IS NOT PART OF THE ANIMATION, AND PUTTING IT INSIDE THE
+     * MOTION GUARD MADE THE PAGE UNREADABLE WITH MOTION OFF.
+     *
+     * All of this used to sit inside `if (state.motion)`, and setMotion(false)
+     * cleared `globeWrap.style.opacity` back to 1 — so with the MOTION pill
+     * pressed, or on any machine that asks for reduced motion, the globe stayed
+     * at FULL brightness behind every chapter of the page. `#scrim` only covers
+     * the left 62% of the viewport, because the whole layout assumes the disc has
+     * faded to 14% by the time the reader is past the hero; at 100% the right-hand
+     * side of §04 and §05 is body copy over a lit continent. Measured at every
+     * chapter: wrap-opacity 1.00 all the way down.
+     *
+     * The rise, the drift and the scale are animation and are correctly gated.
+     * How VISIBLE the globe is behind text is a legibility property of where the
+     * reader is on the page, and it has to hold whether or not anything moves. */
+    const go = 1 - hp * 0.86;
     if (state.motion) {
       const gs = 1 - hp * 0.46;
       const gx = hp * 12, gy = hp * 16;
-      const go = 1 - hp * 0.86;
       globeWrap.style.transform =
         `translate3d(${gx}vmin, calc(-50% + ${gy}vmin), 0) scale(${gs.toFixed(3)})`;
-      globeWrap.style.opacity = String(go);
-      // tell the globe how visible it actually is, so it can stop spending a
-      // full 6 500-point repaint per frame on something at 14% behind the scrim
-      onGlobeDim && onGlobeDim(go);
     }
+    globeWrap.style.opacity = String(go);
+    // tell the globe how visible it actually is, so it can stop spending a
+    // full-resolution repaint per frame on something at 14% behind the scrim
+    onGlobeDim && onGlobeDim(go);
 
     /* ---- which chapter am I in ---- */
     let cur = sections[0];
@@ -121,15 +137,16 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     refresh: read,
     setMotion(on) {
       state.motion = on;
+      /* ★ The globe's OPACITY is deliberately not reset here — see the note in
+         read(). Motion off means nothing moves; it does not mean a lit planet
+         behind the body copy. read() puts the transform back where the scroll
+         position says it belongs and recomputes the opacity either way. */
       if (!on) {
         hero.style.transform = hero.style.filter = '';
         hero.style.opacity = '';
         globeWrap.style.transform = 'translate3d(0, -50%, 0)';
-        globeWrap.style.opacity = '';
-        // the wrapper goes back to fully opaque, so the paint budget must too —
-        // otherwise the globe stays throttled at whatever the last scroll said
-        onGlobeDim && onGlobeDim(1);
-      } else read();
+      }
+      read();
     },
     destroy() {
       clearTimeout(busyTimer);

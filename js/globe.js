@@ -99,20 +99,33 @@ function terminatorAt() {
    rather than as night. Earthshine and airglow are a real thing anyway. */
 const NIGHT = 0.085;
 
-/* ★ THE SURFACE RASTER IS CAPPED, AND THAT IS THE WHOLE PERFORMANCE STORY.
+/* ★ THE SURFACE RASTER IS CAPPED, AND IT WAS CAPPED TOO LOW.
  *
  * Shading the sphere is per-pixel work: unproject, sample the plate, apply the
- * Lambert term. At the hero the disc is ~660px across, which is 342 000 pixels
- * inside the limb, and doing that at 30 Hz is not affordable on a page that also
- * carries two other canvases and a backdrop-filter.
+ * Lambert term. It used to cap at 420 and get scaled up to whatever the disc
+ * actually was — 660 to 1 000 px — and that upscale is most of why Theodor said
+ * "the globe is a bit blurry". A 1.6× smooth upscale of the terrain, with a
+ * full-resolution coastline struck over the top of it, reads as exactly what it
+ * is: a sharp outline round a soft picture.
  *
- * It does not need to be full resolution. The plate is 2048x1024, so the visible
- * hemisphere is 1024 texels wide however big the disc is — at 420px the raster is
- * still oversampling the source, and the vector coastline stroke is drawn on top
- * at full resolution afterwards, which is what the eye reads the edges off. So the
- * surface is rastered into at most a 420px square and scaled up with smoothing:
- * ~138 000 pixels instead of 342 000, and identical to look at. */
-const RASTER_MAX = 420;
+ * ★ RAISING IT WAS NOT AFFORDABLE UNTIL THE GEOMETRY WAS CACHED. Measured, the
+ * old per-pixel pass ran 13 ms at 420 and 36 ms at 640 — past the whole 30 Hz
+ * budget, on a page carrying two other canvases and a backdrop-filter. What made
+ * it affordable is the observation under GEO below: the unprojection does not
+ * depend on the camera's longitude at all, so on a globe whose idle motion IS
+ * longitude it can be computed once and reused. That halves the per-frame cost,
+ * and 700 then lands at ~20 ms with headroom.
+ *
+ * 700 rather than higher because the plate is 2048 wide: the visible hemisphere
+ * carries 1 024 texels however big the disc is, so past about a thousand the
+ * raster is only magnifying the plate's own bilinear filter and buying nothing. */
+const RASTER_MAX = 700;
+
+/* While the camera's LATITUDE is still easing, the raster drops to this. See
+   GEO: a latitude change is the one thing that invalidates the geometry cache,
+   so a 22° look-at would otherwise rebuild it every frame for a second. Motion
+   masks detail anyway — this is the same trade setBusy() makes. */
+const RASTER_MOVING = 340;
 
 /* ★ HOW FAR THE ATMOSPHERE REACHES PAST THE SURFACE, and therefore how much of
  * the canvas is NOT planet.
@@ -203,20 +216,24 @@ const LAND_RINGS = LAND.filter(r => r.length >= 5).map(packRing);
  * ★ THE SURFACE IS BAKED IN js/earth.js NOW, AND IT IS NOT A PHOTOGRAPH.
  *
  * What was here read NASA Blue Marble into a 1024x512 buffer and sampled it. The
- * plate is still 1024x512 and is still sampled exactly the same way — but it is
- * composed at boot from an elevation raster, hypsometrically tinted and lit by a
- * fixed north-west cartographer's sun, with the land cover contributing only a
- * colour cast and the city lights carried in the alpha channel. Read the header
- * of js/earth.js for why, and for what each of the three sources is used for.
+ * plate is sampled in exactly the same way — but it is composed at boot from an
+ * elevation raster, hypsometrically tinted and lit by a fixed north-west
+ * cartographer's sun, with the land cover contributing only a colour cast and the
+ * city lights carried in the alpha channel. Read the header of js/earth.js for
+ * why, and for what each of the three sources is used for.
  *
- * ★ 1024x512 IS NOT ARBITRARY, AND IT SURVIVES THE CHANGE UNTOUCHED.
+ * ★ THE PLATE AND THE RASTER HAVE TO BE SIZED TOGETHER, and getting that ratio
+ * wrong in either direction is visible.
  *
- * The surface raster below is at most RASTER_MAX (420) across, so the visible
- * hemisphere gets 420 pixels. Sampling a 2048-wide plate into that is a 2.4x
- * UNDERSAMPLE, and undersampling is the one artefact bilinear filtering cannot
- * help with: every coastline crawls with alias as the planet drifts, which on
- * something rotating at 0.9°/s is the most visible thing on the page. 512 texels
- * across those 420 pixels is a mild oversample, and bilinear then lands clean.
+ * The visible hemisphere is always half the plate's width, however big the disc
+ * is. Too few texels for the raster and the terrain is magnified out of a source
+ * that does not have the detail — soft, which is what 512-across-420 was. Too
+ * many and it is undersampled, which bilinear filtering cannot fix at all: every
+ * coastline crawls with alias as the planet drifts, and on something rotating at
+ * 0.9°/s that is the most visible thing on the page.
+ *
+ * 2048 wide gives 1024 texels across a raster of at most 700. A mild oversample,
+ * in the safe direction, at both ends of the range.
  * ========================================================================= */
 loadPlate();
 
@@ -387,41 +404,65 @@ export function createGlobe(canvas, opts = {}) {
   function surfaceSize() {
     /* Past the hero the disc is at ~14% opacity behind #scrim, and nobody can see
        a texel there — so it rasters at 200px and the per-pixel cost drops by two
-       thirds exactly where it is least worth paying. Above that it is the subject. */
-    const cap = state.dim < 0.35 ? 200 : RASTER_MAX;
-    return Math.min(cap, Math.max(16, Math.round(state.r * 2)));
+       thirds exactly where it is least worth paying. Above that it is the subject,
+       unless the camera's latitude is still easing — see RASTER_MOVING. */
+    const cap = state.dim < 0.35 ? 200
+      : (Math.abs(state.tLat - state.lat) > 0.04 ? RASTER_MOVING : RASTER_MAX);
+    return Math.min(cap, Math.max(16, Math.round(state.r * 2 * state.dpr)));
   }
 
-  function buildSurface(isDay) {
-    const R = surfaceSize();
-    if (surf.size !== R) {
-      surf.c = document.createElement('canvas');
-      surf.c.width = surf.c.height = R;
-      surf.g = surf.c.getContext('2d');
-      surf.img = surf.g.createImageData(R, R);
-      surf.size = R;
-    }
-    const out = surf.img.data;
-    out.fill(0);
+  /* ======================================================= GEO — THE CACHE
+   * ★ THE UNPROJECTION DOES NOT DEPEND ON THE CAMERA'S LONGITUDE, AND THAT IS
+   * THE WHOLE REASON THE GLOBE CAN AFFORD TO BE SHARP.
+   *
+   * Read the two expressions in the old inner loop again:
+   *
+   *     lat = asin(w·sinφ₀ + v·cosφ₀)
+   *     lon = λ₀ + atan2(u, w·cosφ₀ − v·sinφ₀)
+   *
+   * λ₀ — the camera longitude — appears exactly once, as a term ADDED at the end.
+   * Everything else is a function of the pixel and of the camera LATITUDE only. So
+   * is the Lambert term, because the sun is fixed in camera space now; so is the
+   * fresnel, the coverage alpha and the dusk falloff. Every one of those is
+   * constant while the planet spins.
+   *
+   * And spinning is all it normally does: the idle drift is `state.tLon += …`, and
+   * the latitude only moves when a look-at aims at a venue. So the per-pixel
+   * geometry — two `sqrt`s, an `asin` and an `atan2`, which is the expensive part
+   * — is computed once into these flat arrays and then reused for as long as the
+   * camera stays at that latitude. Per frame, what is left is a texel offset, one
+   * bilinear fetch and a multiply.
+   *
+   * Measured: 13.2 → 9.7 ms at the old 420, and it is what makes 700 fit in
+   * 30 Hz at all (18–20 ms against 36 ms for the uncached pass at 640).
+   *
+   * ★ ONLY PIXELS THE DISC TOUCHES ARE IN HERE, in a flat run, so the per-frame
+   * loop has no bounds test and no branch. `idx` carries each one's byte offset
+   * into the output, which is why they can be stored compacted.
+   * ==================================================================== */
+  const geo = { key: '', n: 0, idx: null, ty: null, xo: null, sh: null, gl: null, du: null, al: null };
 
+  function buildGeo(R, isDay) {
+    const cap = R * R;
+    if (!geo.idx || geo.idx.length < cap) {
+      geo.idx = new Int32Array(cap);
+      geo.ty = new Float32Array(cap); geo.xo = new Float32Array(cap);
+      geo.sh = new Float32Array(cap); geo.gl = new Float32Array(cap);
+      geo.du = new Float32Array(cap); geo.al = new Uint8Array(cap);
+    }
+    const { idx, ty, xo, sh, gl, du, al } = geo;
     const half = R / 2, inv = 1 / half;
     const { sLat, cLat } = cam;
-
-    // the sun, already in the camera's basis — see SUN at the top of this file
     const sx = SUN.x, sy = SUN.y, sz = SUN.z;
-
-    const px = PLATE.px;
     const INV_PI = 1 / Math.PI;
-    const lon0 = state.lon * RAD;
-    /* The day theme is not an inverted night theme anywhere else on this page and it
-       is not here either — see the note at the end of README.md.
+
+    /* The day theme is not an inverted night theme anywhere else on this page and
+       it is not here either — see the note at the end of README.md.
        ★ The DAY side needs MORE contrast between lit and unlit, not less. app.css
        holds the disc at 34% opacity there so a lit ocean does not sit behind body
        copy, and at 34% over warm paper a gentle terminator washes out completely —
        the sphere reads as one flat grey coin and the whole point of a real sun is
-       lost. So the day pass runs a wider lit:unlit ratio (≈11:1 against night's
-       ≈10:1 before the opacity is applied) and the CSS opacity is left exactly where
-       session 4 set it. */
+       lost. */
     const gain = isDay ? 1.30 : 0.95;
     const ambient = isDay ? NIGHT * 1.35 : NIGHT;
     /* How hard the city lights burn on the shadowed crescent. The day theme holds
@@ -429,25 +470,23 @@ export function createGlobe(canvas, opts = {}) {
        ground is just mud, so it gets a third of the night side's. */
     const lampGain = isDay ? 0.34 : 1.0;
 
+    let k = 0;
     for (let py = 0; py < R; py++) {
       const v = -((py + 0.5) - half) * inv;
       const vv = 1 - v * v;
-      /* ★ ONE TEXEL PAST THE LIMB, ON PURPOSE — this row bound and the two below
-         are the antialiasing. The old loop tested `w² > 0` and skipped everything
-         else, which gives the disc a hard edge on the RASTER, and the raster is
-         then scaled up by about 1.6x: a stair-stepped limb, plus a dark fringe
-         where the scaler blended opaque pixels against transparent black. That is
-         the most visible artefact the globe had. Every pixel the disc touches is
-         written now, with a coverage alpha, and the edge resolves sub-texel. */
+      /* ★ ONE TEXEL PAST THE LIMB, ON PURPOSE — this row bound and the coverage
+         below are the antialiasing. The old loop tested `w² > 0` and skipped
+         everything else, which gives the disc a hard edge on the RASTER and then
+         scales it up: a stair-stepped limb, plus a dark fringe where the scaler
+         blended opaque pixels against transparent black. */
       if (vv <= -2 * inv) continue;
       const span = Math.sqrt(Math.max(0, vv));
       const x0 = Math.max(0, Math.ceil(half - span * half - 1.5));
       const x1 = Math.min(R - 1, Math.floor(half + span * half + 0.5));
       // the parts of the unprojection that do not vary along the row
       const vLat = v * cLat, vDen = -v * sLat;
-      let o = (py * R + x0) * 4;
 
-      for (let pxi = x0; pxi <= x1; pxi++, o += 4) {
+      for (let pxi = x0; pxi <= x1; pxi++) {
         const u = ((pxi + 0.5) - half) * inv;
         const w2 = 1 - u * u - v * v;
         // outside the limb the normal is edge-on rather than undefined; clamping
@@ -458,92 +497,116 @@ export function createGlobe(canvas, opts = {}) {
            v²`, so its root is the radius — no extra work to get it. */
         const cov = (1 - Math.sqrt(1 - w2)) / inv + 0.5;
         if (cov <= 0) continue;
-        const alpha = cov >= 1 ? 255 : cov * 255;
 
-        // -- the Lambert term first: a night-side pixel still needs the plate, but
-        //    a pixel outside the disc never gets here at all
         const L = u * sx + v * sy + w * sz;
         /* A hard L>0 cut gives a terminator one pixel wide, and the real one is a
            few hundred kilometres of twilight. Softened over ±0.16 of the cosine,
            which is about 9° of arc — close enough to civil twilight to read right. */
         let lit = L <= -0.16 ? 0 : (L >= 0.16 ? 1 : (L + 0.16) / 0.32);
         lit = lit * lit * (3 - 2 * lit);                 // smoothstep
-        const shade = ambient + (gain - ambient) * lit;
 
-        let rr, gg, bb, lamp = 0;
-        if (px) {
-          /* the inverse orthographic. `vLat` and `vDen` are the v-only halves of
-             these two expressions, lifted out of the row; w varies along it and so
-             stays inside. */
-          const lat = Math.asin(w * sLat + vLat);
-          const lam = lon0 + Math.atan2(u, w * cLat + vDen);
-
-          let tx = (lam * INV_PI * 0.5 + 0.5) * PLATE_W;
-          tx = tx - Math.floor(tx / PLATE_W) * PLATE_W;   // wrap the seam
-          const ty = (0.5 - lat * INV_PI) * PLATE_H;
-
-          const ix = tx | 0, iy = ty < 0 ? 0 : (ty > PLATE_H - 1 ? PLATE_H - 1 : ty | 0);
-          const fx = tx - ix, fy = ty - iy;
-          const ix1 = ix + 1 >= PLATE_W ? 0 : ix + 1;
-          const iy1 = iy + 1 >= PLATE_H ? PLATE_H - 1 : iy + 1;
-          const r0 = (iy * PLATE_W) * 4, r1 = (iy1 * PLATE_W) * 4;
-          const a0 = r0 + ix * 4, b0 = r0 + ix1 * 4;
-          const a1 = r1 + ix * 4, b1 = r1 + ix1 * 4;
-          const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
-          const w01 = (1 - fx) * fy, w11 = fx * fy;
-          rr = px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11;
-          gg = px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11;
-          bb = px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11;
-          /* ★ The fourth channel of the plate is not opacity, it is CITY LIGHT —
-             js/earth.js bakes the emission there so both come out of one bilinear
-             fetch. See the header of that file. It is sampled with the same four
-             weights, which costs four multiplies and is why it lives there. */
-          lamp = px[a0 + 3] * w00 + px[b0 + 3] * w10 + px[a1 + 3] * w01 + px[b1 + 3] * w11;
-        } else {
-          // the plate has not baked yet, or could not be read — a plain ocean, so
-          // the disc is never a hole while the imagery is in flight
-          rr = 14; gg = 38; bb = 58;
-        }
-
-        /* Atmosphere on the way out: a fresnel term toward the limb, tinted blue
-           and scaled by how lit that part of the limb is. This is the `rim` layer
-           the old code blitted in screen space, except that it now follows the sun
-           — the bright crescent is on the day edge, wherever that has got to. */
+        const lat = Math.asin(w * sLat + vLat);
+        const lam = Math.atan2(u, w * cLat + vDen);      // λ₀ is added per frame
         const fres = 1 - w;
-        const glow = fres * fres * fres * 0.85 * lit;
-
-        /* ★ THE LIGHTS LIVE ON THE CRESCENT, and there is only a crescent because
-           the sun moved to the camera. With the light over the reader's shoulder
-           the shadow is the outer fifth of the disc on the lower right — so the
-           cities come round into view along the terminator, burn through the
-           twilight, and go out again as the drift carries them into full shadow at
-           the limb. That is where they read best on any lit sphere anyway; a fully
-           dark hemisphere just shows them lying flat.
-
-           ★ THEY DO NOT WAIT FOR FULL NIGHT, and they must not. Gated on `lit`,
-           which the terminator drives to zero over ±0.16 of the cosine, the lights
-           only existed inside a band a few pixels wide at the very edge of the disc
-           and were effectively invisible. `dusk` is a second, much wider falloff on
-           the same Lambert term — they start showing while it is still arguably
-           evening, at about 0.6 of the radius, and reach full strength at the limb.
-           Which is exactly what a city looks like from orbit at dusk. */
+        /* ★ THE LIGHTS DO NOT WAIT FOR FULL NIGHT, and they must not. Gated on
+           `lit`, which the terminator drives to zero over ±0.16 of the cosine, the
+           lights only existed inside a band a few pixels wide at the very edge of
+           the disc and were effectively invisible. `dusk` is a second, much wider
+           falloff on the same Lambert term — they start showing at about 0.6 of the
+           radius and reach full strength at the limb, which is exactly what a city
+           looks like from orbit at dusk. */
         const dusk = L >= 0.30 ? 0 : (L <= -0.10 ? 1 : (0.30 - L) / 0.40);
-        const night = lamp * dusk * dusk * (2 - dusk) * lampGain * 0.0032;
 
-        /* ★ A ±1 LEVEL DITHER, and it is not superstition. The sea runs a smooth
-           ramp from shelf to deep across a third of the disc and the fresnel runs
-           another across the limb; at 8 bits both of those band into visible
-           contour rings, and a rotating planet turns static rings into moving
-           ones. Half a level of ordered noise puts the quantisation below what the
-           eye can lock onto, and the 1.6x upscale that follows low-passes it back
-           out. Cheap: two multiplies, an add and a mask. */
-        const d = (((pxi * 7 + py * 13) & 7) - 3.5) * 0.30;
-
-        out[o]     = rr * shade + 120 * glow + night * 255 + d;
-        out[o + 1] = gg * shade + 172 * glow + night * 202 + d;
-        out[o + 2] = bb * shade + 214 * glow + night * 128 + d;
-        out[o + 3] = alpha;
+        idx[k] = (py * R + pxi) * 4;
+        ty[k] = (0.5 - lat * INV_PI) * PLATE_H;
+        xo[k] = (lam * INV_PI * 0.5 + 0.5) * PLATE_W;
+        sh[k] = ambient + (gain - ambient) * lit;
+        /* Atmosphere: a fresnel term toward the limb, tinted blue and scaled by
+           how lit that part of the limb is — the bright crescent is on the day
+           edge, wherever the camera has put it. */
+        gl[k] = fres * fres * fres * 0.85 * lit;
+        du[k] = dusk * dusk * (2 - dusk) * lampGain * 0.0032;
+        al[k] = cov >= 1 ? 255 : cov * 255;
+        k++;
       }
+    }
+    geo.n = k;
+  }
+
+  function buildSurface(isDay) {
+    const R = surfaceSize();
+    if (surf.size !== R) {
+      surf.c = document.createElement('canvas');
+      surf.c.width = surf.c.height = R;
+      surf.g = surf.c.getContext('2d');
+      surf.img = surf.g.createImageData(R, R);
+      surf.size = R;
+      geo.key = '';                       // a different raster is different geometry
+    }
+    /* ★ Quantised to a tenth of a degree. The cache is only invalidated by the
+       camera's LATITUDE (and the raster size, and the theme, both of which change
+       rarely) — so at the hero, where the latitude is fixed and only the drift
+       runs, this is built once for the life of the page. */
+    const key = R + '|' + state.lat.toFixed(1) + '|' + (isDay ? 'd' : 'n');
+    if (geo.key !== key) { buildGeo(R, isDay); geo.key = key; }
+
+    const out = surf.img.data;
+    out.fill(0);
+
+    const px = PLATE.px;
+    const { n, idx, ty, xo, sh, gl, du, al } = geo;
+    // the camera's longitude, in texels — the one thing that changes per frame
+    const lonTex = state.lon / 360 * PLATE_W;
+
+    if (!px) {
+      // the plate has not baked yet, or could not be read — a plain ocean, so the
+      // disc is never a hole while the imagery is in flight
+      for (let i = 0; i < n; i++) {
+        const o = idx[i], s = sh[i], g = gl[i];
+        out[o] = 14 * s + 120 * g;
+        out[o + 1] = 38 * s + 172 * g;
+        out[o + 2] = 58 * s + 214 * g;
+        out[o + 3] = al[i];
+      }
+      surf.g.putImageData(surf.img, 0, 0);
+      return surf.c;
+    }
+
+    for (let i = 0; i < n; i++) {
+      let tx = xo[i] + lonTex;
+      tx = tx - Math.floor(tx / PLATE_W) * PLATE_W;      // wrap the seam
+      const t = ty[i];
+
+      const ix = tx | 0, iy = t < 0 ? 0 : (t > PLATE_H - 1 ? PLATE_H - 1 : t | 0);
+      const fx = tx - ix, fy = t - iy;
+      const ix1 = ix + 1 >= PLATE_W ? 0 : ix + 1;
+      const iy1 = iy + 1 >= PLATE_H ? PLATE_H - 1 : iy + 1;
+      const r0 = (iy * PLATE_W) * 4, r1 = (iy1 * PLATE_W) * 4;
+      const a0 = r0 + ix * 4, b0 = r0 + ix1 * 4;
+      const a1 = r1 + ix * 4, b1 = r1 + ix1 * 4;
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+      const w01 = (1 - fx) * fy, w11 = fx * fy;
+
+      const s = sh[i], g = gl[i], o = idx[i];
+      /* ★ The fourth channel of the plate is not opacity, it is CITY LIGHT —
+         js/earth.js bakes the emission there so both come out of one bilinear
+         fetch. It is sampled with the same four weights, four multiplies. */
+      const night = (px[a0 + 3] * w00 + px[b0 + 3] * w10 +
+                     px[a1 + 3] * w01 + px[b1 + 3] * w11) * du[i];
+      /* ★ A ±1 LEVEL DITHER, and it is not superstition. The sea runs a smooth
+         ramp from shelf to deep across a third of the disc and the fresnel runs
+         another across the limb; at 8 bits both band into visible contour rings,
+         and a rotating planet turns static rings into moving ones. `i` alone gives
+         a run of noise along each row, which is all the eye needs it to be. */
+      const d = ((i & 7) - 3.5) * 0.30;
+
+      out[o] = (px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11) * s +
+               120 * g + night * 255 + d;
+      out[o + 1] = (px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11) * s +
+                   172 * g + night * 202 + d;
+      out[o + 2] = (px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11) * s +
+                   214 * g + night * 128 + d;
+      out[o + 3] = al[i];
     }
 
     surf.g.putImageData(surf.img, 0, 0);

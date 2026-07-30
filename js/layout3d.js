@@ -192,12 +192,24 @@ function wire(host) {
     view.rot = START.rot - 11;
     view.zoom = START.zoom * 0.86;
     apply();
-    requestAnimationFrame(() => {
-      host.classList.add('is-revealing');
-      Object.assign(view, START);
-      apply();
-      setTimeout(() => host.classList.remove('is-revealing'), 900);
-    });
+    /* ★ A FORCED REFLOW, NOT A requestAnimationFrame.
+     *
+     * The rAF is the more familiar way to write this and it leaves the pose
+     * indeterminate for as long as the next frame takes — which under headless
+     * swiftshader is a fifth of a second and under a backgrounded tab is forever.
+     * verify.mjs caught it as a flake: RESET VIEW compared against a pose read
+     * while the reveal had not yet started, so the "start" it was asked to
+     * restore was the animation's first frame rather than its last.
+     *
+     * Reading offsetWidth flushes layout, which is all the transition needs to
+     * see the from-pose as a computed style. The target is then set
+     * SYNCHRONOUSLY, so the pose is correct the instant this function returns
+     * and the animation is purely something CSS does on the way there. */
+    void plane.offsetWidth;
+    host.classList.add('is-revealing');
+    Object.assign(view, START);
+    apply();
+    setTimeout(() => host.classList.remove('is-revealing'), 900);
   }
 }
 
@@ -228,7 +240,7 @@ export function stage3d(svg, vb, marks, label) {
      in the artboard's units rather than in pixels, so a 500-wide drawing and a
      1000-wide hand trace lift theirs by the same amount of the picture. */
   const long = Math.max(vb.w, vb.h);
-  const lift = long * 0.12;
+  const lift = long * 0.095;
 
   /* ★ POSTS COME IN THREE HEIGHTS, AND A CIRCUIT IS THE REASON.
    *
@@ -245,7 +257,7 @@ export function stage3d(svg, vb, marks, label) {
    * screen. The test is distance in the DRAWING, so it is the same decision at
    * every zoom, and lap order makes it stable — the same circuit always tiers the
    * same way. */
-  const TIERS = [1, 1.66, 2.32];
+  const TIERS = [1, 1.5, 1.95];
   let tier = 0;
   const tiered = marks.map((m, i) => {
     if (i > 0) {

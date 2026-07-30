@@ -497,7 +497,7 @@ export const CAR = { aLat: 14.0, aBrake: 14.5, aPower: 6.8, vMax: 62 };
  */
 export function speedProfile(P, dsMetres, car) {
   const n = P.length;
-  const k = menger(P, 3);
+  const k = menger(P, relGap(n));
   const v = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     v[i] = k[i] > 1e-9 ? Math.min(car.vMax, Math.sqrt(car.aLat / k[i])) : car.vMax;
@@ -592,8 +592,17 @@ function spanTime(v, dsMetres, from, len, n) {
  * cost — and the full lap is still checked once at the end, so a refinement that
  * somehow made the lap slower is thrown away rather than shipped.
  */
-const WINDOW = 60;          // nodes either side, re-solved for a trial move
-const KGAP = 3;             // curvature stencil half-width, in nodes
+/* ★ EVERY ONE OF THESE IS A FRACTION OF THE LAP, NOT A NUMBER OF NODES.
+ *
+ * They were absolute — WINDOW 60, KGAP 3 — which quietly made all of them mean
+ * something different the moment the resolution changed. A ±60-node window is
+ * ±100 m at 1 400 nodes and ±54 m at 2 600, so raising the density silently
+ * shrank the braking zone the time test could see; a 3-node curvature stencil
+ * goes from 2.5 m to 1.3 m and starts reading sampling noise as corners. Tie them
+ * to the lap and the solver behaves the same at any density, which is the only
+ * way "add more measuring points" can be a safe thing to do. */
+const relWindow = (n) => Math.max(40, Math.round(n * 0.045));   // ±4.5% of the lap
+const relGap = (n) => Math.max(3, Math.round(n / 460));         // curvature stencil
 
 export function racingLine(pts, halfWidth, opts = {}) {
   const n = pts.length;
@@ -607,7 +616,79 @@ export function racingLine(pts, halfWidth, opts = {}) {
 
   const d = new Float64Array(n);
   const w = Math.max(1e-6, halfWidth);
-  const clamp = (v) => (v > w ? w : (v < -w ? -w : v));
+
+  /* ★ THE LINE MAY NOT BE OFFSET FURTHER THAN THE CORNER'S OWN RADIUS ALLOWS,
+   * AND WITHOUT THIS IT FOLDS BACK ON ITSELF.
+   *
+   * Theodor: "the line is too sharp right now." Measured across all 21 circuits,
+   * the sharpest joint in the drawn line was 179.8° — which is not a sharp corner,
+   * it is a REVERSAL. The line was doubling back.
+   *
+   * It is the oldest trap in offset curves. Push a curve sideways by `d` toward
+   * its own centre of curvature and its arc length scales by (1 − d·κ); when that
+   * reaches zero the offset collapses to a point, and past it the curve turns
+   * inside out and crosses itself. The corridor here is a fixed 28 px on screen —
+   * six times the real track width, deliberately, so the lateral movement is
+   * visible at all — and on a tight kart hairpin the DRAWN radius is smaller than
+   * that. So the inside of every hairpin was a cusp waiting to happen, and a
+   * clamp to a constant ±w had nothing to say about it.
+   *
+   * The bound is per node and it is exactly the geometric one: keep 1 − d·κ above
+   * a margin, so the inside of a corner may be used right up to the point where
+   * the line would start eating itself and no further. Which is also true of the
+   * car: nobody drives a line that folds.
+   *
+   * Signed curvature, off the same stencil the speed model uses, with the same
+   * left-of-travel normal — so a positive κ means the centre of curvature is on
+   * the +n side and offsetting that way is what shrinks the radius. */
+  const dLo = new Float64Array(n), dHi = new Float64Array(n);
+  {
+    /* ★ A TIGHT STENCIL, AND THEN THE WORST OF THE NEIGHBOURHOOD.
+     *
+     * The first version read curvature off the same ±relGap window the speed model
+     * uses, and that window is deliberately WIDE — it is there to be stable, which
+     * means it averages a sharp local corner away. So the bound it produced was
+     * too generous exactly where it mattered, and measured after the fix the
+     * offset line still had segments collapsed to a seventh of their length: not
+     * quite folded, but degenerate enough that the heading between two points was
+     * rounding error, and eight circuits still reported 180° joints.
+     *
+     * ±2 nodes is tight enough to see the corner (the centreline is smooth — its
+     * own sharpest joint anywhere in the atlas is 29°, so noise is not the risk
+     * here that it would be on raw data). Then each node takes the most binding
+     * bound within ±SPREAD, so one sharp node protects the run either side of it
+     * instead of being undercut by its neighbours' looser limits. */
+    const g = 2, SPREAD = 4, MARGIN = 0.40;
+    const head = (i) => {
+      const a = pts[i % n], b = pts[(i + 1) % n];
+      return Math.atan2(b[1] - a[1], b[0] - a[0]);
+    };
+    let arc = 0;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      arc += Math.hypot(b[0] - a[0], b[1] - a[1]);
+    }
+    const ds = arc / n;
+    const hi = new Float64Array(n), lo = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let t = head((i + g) % n) - head((i - g + n) % n);
+      while (t > Math.PI) t -= TAU2;
+      while (t < -Math.PI) t += TAU2;
+      const k = t / (2 * g * ds);   // signed curvature, 1/units
+      hi[i] = k > 1e-9 ? Math.min(w, (1 - MARGIN) / k) : w;
+      lo[i] = k < -1e-9 ? Math.max(-w, (1 - MARGIN) / k) : -w;
+    }
+    for (let i = 0; i < n; i++) {
+      let h = hi[i], l = lo[i];
+      for (let s = -SPREAD; s <= SPREAD; s++) {
+        const j = (i + s + n) % n;
+        if (hi[j] < h) h = hi[j];
+        if (lo[j] > l) l = lo[j];
+      }
+      dHi[i] = h; dLo[i] = l;
+    }
+  }
+  const clampAt = (i, v) => (v > dHi[i] ? dHi[i] : (v < dLo[i] ? dLo[i] : v));
 
   /* ------------------------------------------- stage 1: minimum curvature */
   const scales = [];
@@ -623,7 +704,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
         const bx = pts[b][0] + d[b] * nx[b], by = pts[b][1] + d[b] * ny[b];
         const cx = pts[i][0] + d[i] * nx[i], cy = pts[i][1] + d[i] * ny[i];
         const lx = (ax + bx) / 2 - cx, ly = (ay + by) / 2 - cy;
-        d[i] = clamp(d[i] + relax * (lx * nx[i] + ly * ny[i]));
+        d[i] = clampAt(i, d[i] + relax * (lx * nx[i] + ly * ny[i]));
       }
     }
   }
@@ -636,7 +717,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
   for (let s = 0; s < 3; s++) {
     tmp.set(d);
     for (let i = 0; i < n; i++) {
-      d[i] = clamp((tmp[(i - 1 + n) % n] + 2 * tmp[i] + tmp[(i + 1) % n]) / 4);
+      d[i] = clampAt(i, (tmp[(i - 1 + n) % n] + 2 * tmp[i] + tmp[(i + 1) % n]) / 4);
     }
   }
 
@@ -664,6 +745,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
   let v = speedProfile(line, ds, car);
   const t0 = spanTime(v, ds, 0, n, n);                  // the whole lap, once
 
+  const WINDOW = relWindow(n), KGAP = relGap(n);
   const SPAN = 2 * WINDOW + 1;
   const vw = new Float64Array(SPAN);
   const dvB = 2 * car.aBrake * ds, dvP = 2 * car.aPower * ds;
@@ -732,7 +814,7 @@ export function racingLine(pts, halfWidth, opts = {}) {
   const apply = (c, amp) => {
     for (let s = 0; s <= 2 * K; s++) {
       const i = (c - K + s + n * 2) % n;
-      d[i] = clamp(keep[s] + amp * bump[s]);
+      d[i] = clampAt(i, keep[s] + amp * bump[s]);
     }
   };
   const save = (c) => {
@@ -740,6 +822,79 @@ export function racingLine(pts, halfWidth, opts = {}) {
   };
   const restore = (c) => {
     for (let s = 0; s <= 2 * K; s++) d[(c - K + s + n * 2) % n] = keep[s];
+  };
+
+  /* ★ THE OFFSETS ARE SMOOTHED BETWEEN SWEEPS, AND THAT IS NOT COSMETIC.
+   *
+   * Theodor, on the first version: "the line is too sharp right now."
+   *
+   * The trial bump is a raised cosine, which is smooth — right up until the clamp
+   * gets hold of it. Every circuit here solves to a swing of 1.00, meaning the
+   * line is against the kerb somewhere on every lap, so `clamp()` is flat-topping
+   * bumps constantly: a smooth curve with a flat lid on it is continuous but its
+   * DERIVATIVE is not, and a break in the derivative of a lateral offset is
+   * exactly a visible kink in the drawn line.
+   *
+   * Two passes of [1 2 1] after each sweep, re-clamped. Applied INSIDE the loop
+   * rather than once at the end on purpose: the next sweep then measures the lap
+   * time of the smoothed line, so the descent gets to decide whether it still
+   * wants the move — instead of smoothing away a decision it was never asked
+   * about. Whatever survives is both smooth and faster, and the final full-lap
+   * check below is measured on the line that actually ships.
+   */
+  /* ★ AND A BOUND ON THE CURVATURE IS STILL NOT ENOUGH — MEASURE THE RESULT.
+   *
+   * The clamp above works from an ESTIMATE of the centreline's curvature, and an
+   * estimate is what it can only ever be: read it over a wide stencil and it
+   * averages a hairpin away, read it over a tight one and it starts reporting the
+   * sampling. Both were tried. After the tight version, three circuits — Kalmar,
+   * Gelleråsen, Uddevalla — still had segments compressed to under a fiftieth of
+   * their neighbours', which is a line whose local direction is rounding error.
+   *
+   * So this stops predicting the collapse and simply looks for it: walk the
+   * offset line as it actually stands, and anywhere a segment has lost more than
+   * three quarters of its length, ease both its ends back toward the centreline.
+   * Moving toward the centreline always relieves an inner-offset compression —
+   * the scale factor is 1 − d·κ and shrinking |d| can only raise it — so this
+   * converges, and it needs no model of anything. A handful of passes, O(n) each.
+   *
+   * It runs INSIDE the descent, after each sweep, for the same reason the
+   * smoothing does: the next sweep then measures the lap time of the line that
+   * will actually be drawn, and can spend its next move somewhere useful instead
+   * of pushing again into a corner it is not allowed to have. */
+  const relieve = () => {
+    const floor = 0.25;                       // of the mean segment length
+    for (let pass = 0; pass < 10; pass++) {
+      let mean = 0;
+      const len = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const ax = CX[i] + d[i] * nx[i], ay = CY[i] + d[i] * ny[i];
+        const bx = CX[j] + d[j] * nx[j], by = CY[j] + d[j] * ny[j];
+        len[i] = Math.hypot(bx - ax, by - ay);
+        mean += len[i];
+      }
+      mean /= n;
+      const lim = mean * floor;
+      let hit = 0;
+      for (let i = 0; i < n; i++) {
+        if (len[i] >= lim) continue;
+        hit++;
+        const j = (i + 1) % n;
+        d[i] *= 0.82; d[j] *= 0.82;
+      }
+      if (!hit) break;
+    }
+  };
+
+  const relax = new Float64Array(n);
+  const smooth = (passes) => {
+    for (let s = 0; s < passes; s++) {
+      relax.set(d);
+      for (let i = 0; i < n; i++) {
+        d[i] = clampAt(i, (relax[(i - 1 + n) % n] + 2 * relax[i] + relax[(i + 1) % n]) / 4);
+      }
+    }
   };
 
   /* Coarse to fine: the first step is a quarter of the road, which is enough to
@@ -762,6 +917,8 @@ export function racingLine(pts, halfWidth, opts = {}) {
         }
         if (pick) { apply(c, pick); moved++; }
       }
+      smooth(2);
+      relieve();
       /* The window's boundary speeds came from `v`, which a sweep has just made
          stale. Re-solving here is what stops the descent optimising against its
          own out-of-date picture of the lap. */

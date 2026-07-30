@@ -16,7 +16,7 @@ import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
 import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
 import { stage3d, mount as mount3d } from './layout3d.js';
-import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS } from './gear.js';
+import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS, kit } from './gear.js';
 
 /* ============================================================ small helpers */
 const $ = (s, r = document) => r.querySelector(s);
@@ -497,6 +497,77 @@ function renderCatalogue() {
   $('#cat-sub').textContent = `${TRACKS.length} COMPETITION CIRCUITS · REFERENCE LAYER`;
 }
 
+/* ============================================================== §05 THE KIT
+ * ★ 1.x HAS A GEAR SCREEN AND 2.0 HAD HALF A PACKING LIST.
+ *
+ * Theodor: "in the first Field Atlas I had equipment and gear sections, which I
+ * also want you to make — but don't put in random stuff."
+ *
+ * Everything 2.0 knew about the kit was buried inside a date's panel, as a list
+ * of tick boxes for one weekend. That is the *bringing* list, which is a
+ * different question from what the kit IS — and the kit is the thing you look at
+ * when you are deciding whether to hire a 70–200 for Kanonloppet.
+ *
+ * So the whole inventory gets a chapter, grouped the way 1.x groups it, with the
+ * two distinctions 1.x carries in the data and this page has no business hiding:
+ * what he OWNS, what he would RENT, and which entries were only ever a generic
+ * suggestion. See KIT_1X in js/gear.js for where the list comes from and why the
+ * provenance line under it is not optional.
+ * ========================================================================= */
+function renderKit() {
+  const host = $('#kit-grid');
+  if (!host) return;
+  const k = kit();
+
+  if (k.source === 'too-new') {
+    host.innerHTML = `<p class="p-empty">The gear data on this device was written by a newer
+      Field Atlas 1.x (schema v${esc(String(k.version))}) than this page knows how to read.
+      Rather than guess at the shape and show you something wrong, 2.0 is staying out of it.</p>`;
+    $('#kit-src').textContent = '';
+    return;
+  }
+
+  const owned = k.items.filter(i => !i.rental && !i.suggested);
+  const rental = k.items.filter(i => i.rental);
+  const bodies = k.items.filter(i => i.category === 'Bodies' && !i.rental).length;
+  const lenses = k.items.filter(i => i.category === 'Lenses' && !i.rental).length;
+
+  $('#kit-lede').textContent =
+    `${owned.length} pieces of equipment I own, ${rental.length} I would hire, and the ` +
+    `basics that live in the bag. Every date in §02 draws its packing list from this same ` +
+    `inventory — the kit is one list, the weekend is a selection from it.`;
+  $('#kit-sub').textContent =
+    `${bodies} ${bodies === 1 ? 'BODY' : 'BODIES'} · ${lenses} ${lenses === 1 ? 'LENS' : 'LENSES'} · ` +
+    `${k.items.length} ITEMS`;
+
+  const byCat = new Map(GEAR_CATS.map(c => [c, []]));
+  for (const it of k.items) byCat.get(it.category)?.push(it);
+
+  host.innerHTML = GEAR_CATS.filter(c => byCat.get(c).length).map((cat, ci) => {
+    const rows = byCat.get(cat).map(it => `
+      <li class="kit-item${it.rental ? ' is-rental' : ''}${it.suggested ? ' is-sug' : ''}">
+        <span class="nm">${esc(it.name)}</span>
+        ${it.qty > 1 ? `<span class="q num mono">×${it.qty}</span>` : ''}
+        ${it.rental ? '<span class="tag mono">RENTAL</span>'
+                    : (it.suggested ? '<span class="tag tag--dim mono">BASIC</span>'
+                                    : '<span class="tag tag--own mono">OWNED</span>')}
+      </li>`).join('');
+    return `<section class="kit-cat rise" style="--d:${(0.05 * ci).toFixed(2)}s">
+      <h3 class="mono">${esc(cat)}<span class="n num">${byCat.get(cat).length}</span></h3>
+      <ul>${rows}</ul>
+    </section>`;
+  }).join('');
+
+  /* ★ SAY WHICH LIST THIS IS. Live from 1.x on his phone, recovered from 1.x's
+     git history anywhere else — and a reader looking at their own equipment
+     deserves to know which, because only one of the two is editable and only one
+     of them is current. */
+  $('#kit-src').textContent = k.source === 'live'
+    ? 'READ LIVE FROM FIELD ATLAS 1.x ON THIS DEVICE'
+    : 'FIELD ATLAS 1.x INVENTORY · RECOVERED FROM ITS OWN HISTORY · '
+      + 'THIS DEVICE HAS NO LIVE 1.x DATA';
+}
+
 /* ============================================================== THE PANEL
  * Two kinds of detail view, one host. Routes are `date/<venueId>:<index>` and
  * `circuit/<id>`, matching the keys the page already uses everywhere else.
@@ -790,19 +861,6 @@ function packingHtml(e) {
       </section>`;
   }
 
-  if (list.state === 'none') {
-    // a fresh browser has no evhub.* at all — say so, do not render an empty box
-    return `<section class="p-sec" id="p-gear">${head}
-      <p class="p-empty">No gear inventory on this device yet. The kit list lives in
-      <b>Field Atlas 1.x</b> — add your bodies, lenses and the rest there once and every date in
-      this atlas will show it.</p>
-      <p class="p-empty p-note">In development this is expected: 1.x on <code>:8765</code> and
-      2.0 on <code>:8766</code> are different origins, so they do not share storage. In production
-      both are served from <code>tedde1000.github.io</code> and do.</p>
-      <a class="p-out mono" href="https://tedde1000.github.io/Field-Atlas/" target="_blank"
-         rel="noopener">OPEN FIELD ATLAS 1.x →</a></section>`;
-  }
-
   const byCat = new Map(GEAR_CATS.map(c => [c, []]));
   for (const it of list.items) byCat.get(it.category)?.push(it);
 
@@ -823,10 +881,17 @@ function packingHtml(e) {
     ? `${list.total} ITEM${list.total === 1 ? '' : 'S'} · 1.x LIST + THIS DEVICE`
     : `${list.total} ITEM${list.total === 1 ? '' : 'S'} · NOTHING PICKED IN 1.x FOR THIS DATE`;
 
+  /* which inventory these boxes are ticking against — see kit() in js/gear.js */
+  const src = list.source === 'live'
+    ? 'INVENTORY READ LIVE FROM FIELD ATLAS 1.x · TICKS SAVED ONLY IN 2.0'
+    : 'INVENTORY RECOVERED FROM FIELD ATLAS 1.x · NO LIVE 1.x DATA ON THIS DEVICE'
+      + ' · TICKS SAVED ONLY IN 2.0';
+
   return `<section class="p-sec" id="p-gear">${head}
     <div class="p-gear-sub mono">${note}</div>
     ${groups}
-    <div class="p-src mono">INVENTORY READ FROM FIELD ATLAS 1.x · TICKS SAVED ONLY IN 2.0</div>
+    <div class="p-src mono">${src}</div>
+    <a class="p-out mono" href="#kit" data-jump="kit">SEE THE WHOLE KIT →</a>
   </section>`;
 }
 
@@ -1009,6 +1074,7 @@ function boot() {
   renderChips();
   renderEntries();
   renderCatalogue();
+  renderKit();
 
   const stars = createStarfield($('#stars'));
   const globe = createGlobe($('#globe'), { lon: 16.5, lat: 42 });
@@ -1125,7 +1191,17 @@ function boot() {
     const jump = ev.target.closest('[data-jump]');
     if (jump) {
       ev.preventDefault();
-      scrollToEl(document.getElementById(jump.dataset.jump), 18);
+      const target = document.getElementById(jump.dataset.jump);
+      /* ★ A jump out of an OPEN panel has to close it first, and then wait. The
+         panel locks the document scroll (`is-locked` on <html> and <body>), so
+         scrolling while it is up does nothing at all — the click would read as
+         dead. close() unlocks on the next hashchange, hence the frame. */
+      if (panel.isOpen()) {
+        panel.close();
+        requestAnimationFrame(() => requestAnimationFrame(() => scrollToEl(target, 18)));
+      } else {
+        scrollToEl(target, 18);
+      }
       return;
     }
     const hit = ev.target.closest('[data-route]');
@@ -1230,7 +1306,8 @@ function boot() {
   $('#kicker-right').textContent =
     `VOL. II · ${EVENTS.length} DATES · ${ALL.length} CIRCUITS`;
   $('#foot-sig').innerHTML =
-    `— END OF CATALOGUE · ${ALL.length} CIRCUITS · ${EVENTS.length} DATES`;
+    `— END OF CATALOGUE · ${ALL.length} CIRCUITS · ${EVENTS.length} DATES · ` +
+    `${kit().items.length} ITEMS OF KIT`;
 
   /* --- the two pills --- */
   const prefersStill = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
