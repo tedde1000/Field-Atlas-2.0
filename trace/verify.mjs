@@ -724,14 +724,29 @@ const restHz = (b.n - a.n) / ((b.t - a.t) / 1000);
  * inside the tail and independent of whatever the renderer is managing. */
 const busyRun = await p.evaluate(async (ms) => {
   const c = document.getElementById('globe');
-  let first = null, last = null, samples = 0, reopened = 0;
+  let first = null, last = null, samples = 0, reopened = 0, stalled = 0;
   const t0 = performance.now();
   while (performance.now() - t0 < ms) {
     // instant, not smooth: html{scroll-behavior:smooth} turns each scrollBy into
     // an rAF-driven animation, which puts the scroll events back on the 5-8 Hz
     // headless frame clock and straight back outside the busy tail
     window.scrollBy({ top: 10, behavior: 'instant' });
+    const before = performance.now();
     await new Promise(r => setTimeout(r, 40));
+    /* ★ A SAMPLE THE HARNESS SLEPT THROUGH IS NOT EVIDENCE ABOUT THE PAGE.
+     *
+     * `setBusy(false)` fires 140ms after the last scroll, and a 40ms loop sits
+     * comfortably inside that — unless the timer itself overruns, which under
+     * headless it does, unpredictably, by hundreds of milliseconds. When it does
+     * the gate has correctly reopened and the next sample counts it as a failure
+     * of the page. Measured across three consecutive runs of this file: two clean,
+     * one at 25 reopens in 24 samples, on identical code.
+     *
+     * So an overrun past the busy tail is discarded rather than scored. It is not
+     * a loosened threshold — every sample that IS scored is one where the reader
+     * was genuinely still scrolling — and `paintsWhileBusy`, which is the actual
+     * invariant, is untouched and was 0 in all three of those runs. */
+    if (performance.now() - before > 120) { stalled++; continue; }
     if (c.dataset.busy === '1') {
       samples++;
       const n = +c.dataset.paints || 0;
@@ -739,7 +754,7 @@ const busyRun = await p.evaluate(async (ms) => {
       last = n;
     } else if (first !== null) reopened++;
   }
-  return { samples, reopened, paintsWhileBusy: last === null ? -1 : last - first };
+  return { samples, reopened, stalled, paintsWhileBusy: last === null ? -1 : last - first };
 }, 2400);
 
 await quiet(3600);

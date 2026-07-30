@@ -50,7 +50,8 @@ js/loop.js               geometry: corner-radius paths, splines, flattening, cor
 js/layout3d.js           the panel's track layout on a plane you can turn
 js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy signal
 js/panel.js              the detail overlay: routing, focus, history
-js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks
+js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks and
+                         the kit recovered from 1.x's git history
 data/atlas.js            GENERATED — venues, events, circuits, metrics
 data/world.js            GENERATED — land outlines (Natural Earth 50m, simplified)
 
@@ -97,7 +98,19 @@ explains why that holds.
 ```bash
 python3 trace/bundle.py            # rebuild both .dc.html files
 python3 trace/bundle.py --check    # are they in sync with the sources?
+
+node trace/bundle.mjs              # the same thing, for machines without Python
+node trace/bundle.mjs --check
 ```
+
+The two bundlers are a **port of each other and produce byte-identical output** —
+`--check` on either reports the other's build as clean, which is what will catch
+you if you change one and not the other. Same for `trace/serve.py` and
+`trace/serve.mjs`. The Node versions exist because a project whose selling point is
+"no build step, just serve it" should not be un-runnable for want of an interpreter
+it never actually needs, and because the `.dc.html` pair is not an optional
+artefact — a session that cannot regenerate it ships a stale standalone silently,
+since `index.html` goes on working perfectly.
 
 The only difference between the two is a `<template id="__bundler_thumbnail">`
 block, exactly as in 1.x — and `--check` asserts that, so the pair cannot quietly
@@ -112,6 +125,7 @@ drift into being two different pages.
 | 02 | The Season | One entry per date: summary, drawn layout, spec sheet, bars |
 | 03 | Anatomy of a Circuit | A **solved** racing line, with the flow paced off its curvature |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
+| 05 | The Kit | The whole equipment inventory, owned / rental / basic |
 
 ### The globe is a shaded-relief sphere, lit over the reader's shoulder
 
@@ -152,9 +166,18 @@ Five things about it are load-bearing:
   light, false of that image, where Tokyo measures (234,232,232). The backdrop is
   what is coloured. Getting this backwards threw away the four largest light fields
   on Earth and rendered a completely dark terminator.
-- **It is rastered small and scaled up** — at most 420px, 200px while the disc is
-  dimmed behind the scrim — and its limb carries a sub-texel coverage alpha, drawn
-  *outside* the arc clip, because canvas `clip()` is not antialiased in Chrome.
+- **The unprojection does not depend on the camera's longitude**, and that is what
+  lets the disc be sharp at all. `λ₀` appears once, as a term added at the end; the
+  rest — and the Lambert term, the fresnel, the coverage alpha — is a function of
+  the pixel and the camera *latitude*, which only moves on a look-at. So the
+  per-pixel geometry is cached and the per-frame loop is a texel offset, a bilinear
+  fetch and a multiply. That halved the cost (13.2 → 9.7 ms at the old size) and is
+  the only reason the raster could be raised from 420 to **700** without blowing
+  the 30 Hz budget: the uncached pass at 640 measured 36 ms.
+- **It is rastered and scaled** — at most 700px, 340 while the camera's latitude is
+  easing, 200 while the disc is dimmed behind the scrim — and its limb carries a
+  sub-texel coverage alpha, drawn *outside* the arc clip, because canvas `clip()`
+  is not antialiased in Chrome.
 - **The per-ring land fills are gone.** 892 `Path2D` allocations and `fill()` calls
   per frame paid for the surface pass. Only the batched stroke remains.
 
@@ -176,14 +199,31 @@ the mean apex moves from **0.29** of the way through a corner to **0.45**, and 9
 228 corners end up apexing past 0.55.
 
 Two things make it affordable and one makes it safe. The lap is resampled to
-**1 400 evenly spaced nodes** first, because every solver here assumes even spacing
+**2 600 evenly spaced nodes** first, because every solver here assumes even spacing
 and because at the old density an apex was three nodes and could not be placed late
-even in principle. The time test is **windowed** — ±60 nodes with the end speeds
-pinned to the current full-lap answer — since a full lap per trial is fifty million
-operations and a visible stall. And the whole lap is measured once at the end
-against the line it started from: if the refinement did not actually help, the
+even in principle. The time test is **windowed** — ±4.5% of the lap, with the end
+speeds pinned to the current full-lap answer — since a full lap per trial is fifty
+million operations and a visible stall. And the whole lap is measured once at the
+end against the line it started from: if the refinement did not actually help, the
 minimum-curvature line ships instead and `data-solve` says `curvature` rather than
 `lap-time`, so the figure is conservative rather than wrong.
+
+**Every distance in the solver is a fraction of the lap, not a number of nodes** —
+the window, the curvature stencil, the trial bump, the stride, and the flow's own
+advance and streak length. They were absolute once, and raising the density then
+silently changed the meaning of all of them.
+
+Three things keep the drawn line smooth, and the first two are geometry rather than
+taste. The trial bump is a raised cosine, which is smooth until the clamp
+flat-tops it — so the offsets are **smoothed between sweeps**, inside the descent,
+where the next sweep can still overrule it. The corridor is six times the real
+track width, which on a tight kart hairpin is **wider than the corner's own
+radius**: push an offset past `1/κ` and the curve turns inside out, so each node
+carries a per-node bound from the local curvature. And because a curvature estimate
+is only ever an estimate, a final pass **measures the offset line as it stands** and
+eases back anywhere a segment has lost three quarters of its length. Before that
+last one, eight circuits still drew 180° reversals — a line doubling back inside a
+hairpin, invisible at a glance and meaningless to the speed model reading it.
 
 The vehicle is chosen by lap length — under 2 km is a kart, Gelleråsen is a car —
 and the two genuinely draw different lines, because a kart has more lateral grip and
@@ -205,6 +245,24 @@ counter-rotated by exactly the stage's rotation, so the post leans and foreshort
 and the number never does. Crowded corners get taller posts — Gelleråsen has four
 turns inside a fifth of the drawing, and on posts of one height their labels landed
 in an unreadable stack.
+
+### §05 — the kit
+
+`js/gear.js` owns everything about the equipment. The whole inventory is grouped
+the way 1.x groups it, with the two distinctions 1.x keeps in the data: what is
+**owned**, what would be **rented**, and which entries were only ever a generic
+suggestion.
+
+The list is 1.x's. It is not in this repository at runtime — `evhub.gear.inventory`
+is localStorage, so the real one lives in the browser on the phone — and on
+`tedde1000.github.io` both apps are the same origin and 2.0 reads it live. Anywhere
+else, `KIT_1X` stands in: the 29-item inventory recovered from Field-Atlas commit
+`dacef4d`, before `7497b37` removed the seed. Session 16's notes describe it as
+"real kit + rental options + suggested basics", which is why the badges matter.
+**A live inventory always wins, and the page always says which one it is showing.**
+2.0 still never writes `evhub.*`.
+
+1.x's hard rule is kept: never seed or suggest flash or strobe.
 
 ### Corner numbers, and how the count is reconciled
 
