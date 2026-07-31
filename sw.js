@@ -30,11 +30,16 @@
  *   is worth the round trip, and offline still works because the fallback
  *   is a full precache rather than a partial one.
  * ===================================================================== */
-const CACHE_VERSION = 'fa2-v1';
+const CACHE_VERSION = 'fa2-v2';
 const SHELL = CACHE_VERSION + '-shell';
-const FONTS = CACHE_VERSION + '-fonts';
 
-const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
+/* There is no cross-origin branch here, and that is a property of the page
+   rather than an omission: since Outfit was self-hosted into assets/fonts.css
+   (trace/fonts.mjs) as data: URIs, 2.0 requests nothing off its own origin.
+   The worker used to carry a fonts.googleapis.com / fonts.gstatic.com cache,
+   which meant the typeface only arrived on the SECOND load — a cold offline
+   first launch fell back to system sans. Nothing to cache now; it ships in the
+   stylesheet. If anything here ever needs a CDN again, that is the regression. */
 
 /* The unstamped half of the shell: the module graph main.js pulls in, plus the
    files that are never referenced from index.html with an attribute at all.
@@ -103,16 +108,6 @@ self.addEventListener('activate', (e) => {
   })());
 });
 
-async function staleWhileRevalidate(req, cacheName) {
-  const c = await caches.open(cacheName);
-  const hit = await c.match(req);
-  const net = fetch(req).then(res => {
-    if (res && (res.ok || res.type === 'opaque')) c.put(req, res.clone());
-    return res;
-  }).catch(() => null);
-  return hit || (await net) || Response.error();
-}
-
 async function cacheFirst(req, cacheName) {
   const c = await caches.open(cacheName);
   const hit = await c.match(req);
@@ -144,11 +139,6 @@ self.addEventListener('fetch', (e) => {
   let url;
   try { url = new URL(req.url); } catch (err) { return; }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
-
-  if (FONT_HOSTS.includes(url.hostname)) {
-    e.respondWith(staleWhileRevalidate(req, FONTS));
-    return;
-  }
 
   if (url.origin !== self.location.origin) return;
 

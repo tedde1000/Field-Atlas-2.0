@@ -55,6 +55,8 @@ js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks and
 data/atlas.js            GENERATED — venues, events, circuits, metrics
 data/world.js            GENERATED — land outlines (Natural Earth 50m, simplified)
 
+assets/fonts.css         GENERATED — Outfit, self-hosted, inlined as data: URIs
+fonts/                   the woff2 source for the above: Outfit 100-900, 2 subsets
 manifest.webmanifest     the install manifest — name, colours, `display: standalone`
 sw.js                    the service worker: precache the shell, then work offline
 icons/                   GENERATED — the launcher icons, by trace/icons.mjs
@@ -72,6 +74,7 @@ trace/bundle.py          js/ + assets/ + data/ + index.html -> the two .dc.html 
 trace/verify.mjs         headless smoke test
 trace/shots.mjs          one PNG per chapter, plus mobile and day side
 trace/shots/             the captures
+trace/fonts.mjs          assets/fonts.css — Outfit, from fonts/, as data: URIs
 trace/icons.mjs          icons/ — the aperture mark, rasterised by headless Chrome
 trace/plate.html         DEV — the baked Earth plate, laid out flat, plus the sphere
 trace/figure.html        DEV — §03's racing line on its own, one circuit at a time
@@ -319,11 +322,17 @@ Two things about the worker are worth knowing before you change it.
   trip is worth it, and offline still works because the precache is complete rather
   than partial.
 
-**Offline is complete except for the typeface.** The shell, the data, the earth
-imagery and the icons are all precached, and Outfit is cached from Google Fonts on
-the second load — so a cold first launch with no signal falls back to the system
-sans until the fonts have been seen once. PROMPT.md task 4 (self-host Outfit into
-`fonts/`) is what closes that, and is still open.
+**Offline is complete, and the page makes zero cross-origin requests.** The shell,
+the data, the earth imagery, the icons and the typeface are all either precached or
+inlined, so a cold launch on a phone that has never seen the site — and has no signal
+— renders correctly, Outfit included. Verified with the dev server stopped outright
+rather than with a throttling toggle: 18 resources, none of them off-origin, none of
+them failed.
+
+The worker therefore has **no cross-origin branch at all**, which is a property of the
+page rather than an omission. It used to carry a `fonts.gstatic.com` cache, and that
+was the hole: the typeface only arrived on the *second* load. If anything here ever
+needs a CDN again, that is the regression to catch.
 
 ---
 
@@ -466,15 +475,37 @@ Writes `trace/shots/*.png` — one per chapter, plus a day-side and two mobile f
 
 ## Notes
 
-- **Fonts** load from Google Fonts — **Outfit**, one variable file over weights 300–800,
-  and nothing else. Session 4 replaced the original trio (Bodoni Moda display, Newsreader
+- **Fonts are self-hosted** — **Outfit**, one variable file over weights 100–900, and
+  nothing else. Session 4 replaced the original trio (Bodoni Moda display, Newsreader
   body, JetBrains Mono labels) with a single geometric sans, so the page now separates its
   registers by weight and tracking rather than by changing face. Two things follow from
   that and are documented where they bite: `--font-mono` and the `.mono` class kept their
   names but no longer mean monospaced, and every column that used to stay put because the
   pitch was fixed — the ticking countdown above all — now asks for `tabular-nums`
-  explicitly. 1.x self-hosts its faces in `fonts/`; if 2.0 ever needs to work offline, do
-  the same here (PROMPT.md task 4 — now one family to download instead of three).
+  explicitly.
+
+  `fonts/*.woff2` is the committed source, 46 KB over the two subsets Google
+  publishes; `assets/fonts.css` is **generated** from it by `trace/fonts.mjs` and is
+  what `index.html` actually links.
+
+  ```bash
+  node trace/fonts.mjs            # regenerate assets/fonts.css from fonts/
+  node trace/fonts.mjs --fetch    # re-download the woff2 from Google first
+  ```
+
+  ★ **The faces go in as base64 `data:` URIs, and that is not an optimisation.** The
+  same stylesheet has to be correct in three places that disagree about what a
+  relative `url()` means: served, it sits in `assets/`; inlined by `trace/bundle.mjs`
+  it resolves against the repo root; and inside the `.dc.html` pair it is opened off
+  `file://` with no sibling `fonts/` at all. A `data:` URI has no base to be relative
+  to, so it is right in all three. That is also why it is a separate sheet rather than
+  a block in `tokens.css` — 61 KB of base64 would bury the one file whose whole job is
+  to be read.
+
+  ★ **Do not write a stylesheet `<link>` tag out in prose inside `index.html`.**
+  `trace/bundle.mjs` finds them with a regex that cannot tell a comment from markup,
+  and will try to open whatever stands in the `href`. A comment explaining the font
+  link is what caught this, and the build died on a file named `…`.
 - **Motion is on by default, and the choice is remembered** in `fa2.motion`. It used to
   be `motion = !matchMedia('(prefers-reduced-motion: reduce)').matches` and nothing else
   — the OS setting was re-read on every load and the reader's answer was never stored

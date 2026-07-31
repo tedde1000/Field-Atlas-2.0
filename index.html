@@ -23,9 +23,18 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c9974f' stroke-width='1.6'%3E%3Cpath d='M1.6 12S6 5 12 5s10.4 7 10.4 7-4.4 7-10.4 7S1.6 12 1.6 12Z'/%3E%3Ccircle cx='12' cy='12' r='3.1'/%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=58e20153">
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300..800&display=swap" rel="stylesheet">
+<!-- ★ Outfit is SELF-HOSTED, and the attribute ORDER here is load-bearing.
+     trace/bundle.mjs inlines a stylesheet link by matching rel-then-href
+     literally; the Google link this replaced was written href-first, which is
+     exactly how it survived bundling as a live CDN link. Written this way round
+     the faces fold into the .dc.html pair with everything else.
+     (Do not write that tag out in prose anywhere in this file — the bundler's
+     regex does not know a comment from markup, and will try to open whatever
+     stands in the href. It did.)
+     assets/fonts.css is GENERATED — see trace/fonts.mjs. The page now makes no
+     cross-origin request at all, which is what lets a cold offline launch, on a
+     phone that has never seen the site before, still look right. -->
+<link rel="stylesheet" href="assets/fonts.css?v=95d09e90">
 
 <link rel="stylesheet" href="assets/tokens.css?v=502e59e0">
 <link rel="stylesheet" href="assets/app.css?v=63e4c3d2">
