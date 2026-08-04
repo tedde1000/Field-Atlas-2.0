@@ -44,11 +44,14 @@ js/main.js               data -> DOM, the editorial copy, wiring
 js/globe.js              orthographic Earth on a 2D canvas, lit from the camera
 js/earth.js              bakes the three sources into one relief plate, once, at boot
 js/starfield.js          the field behind everything
-js/circuit.js            §03 — particles round a lap-time-solved racing line
+js/circuit.js            §03 — particles round a lap-time-solved racing line, on
+                         the 3D stage below
 js/loop.js               geometry: corner-radius paths, splines, flattening, corners,
                          resampling, the speed model and the racing-line solver
-js/layout3d.js           the panel's track layout on a plane you can turn
-js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy signal
+js/layout3d.js           the track layout on a plane you can turn — the panel's,
+                         and §03's
+js/scroll.js             progress, hero dissolve, chapter readout, reveal, busy
+                         signal, and whether §03 is near enough to paint
 js/panel.js              the detail overlay: routing, focus, history
 js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks and
                          the kit recovered from 1.x's git history
@@ -132,14 +135,14 @@ drift into being two different pages.
 | 00 | Overture | Title, lede, live countdown to the next date, the globe |
 | 01 | The Dates | Every booking in the season, one row each, in order |
 | 02 | The Season | One entry per date: summary, drawn layout, spec sheet, bars |
-| 03 | Anatomy of a Circuit | A **solved** racing line, with the flow paced off its curvature |
+| 03 | Anatomy of a Circuit | A **solved** racing line on a 3D stage you can turn, with the flow paced off its speed profile |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
 | 05 | The Kit | The whole equipment inventory, owned / rental / basic |
 
 ### The globe is a shaded-relief sphere, lit over the reader's shoulder
 
 `js/earth.js` composes the surface **once, at boot**, out of three equirectangular
-sources and hands `js/globe.js` a single 1024×512 RGBA plate: elevation gives the
+sources and hands `js/globe.js` a single 2048×1024 RGBA plate: elevation gives the
 shape, tinted hypsometrically and hillshaded by a fixed north-west cartographer's
 sun the way a paper atlas does it; Blue Marble contributes a heavily low-passed
 colour cast and nothing else, so the Sahara stays sand and the taiga stays dark
@@ -183,12 +186,35 @@ Five things about it are load-bearing:
   fetch and a multiply. That halved the cost (13.2 → 9.7 ms at the old size) and is
   the only reason the raster could be raised from 420 to **700** without blowing
   the 30 Hz budget: the uncached pass at 640 measured 36 ms.
-- **It is rastered and scaled** — at most 700px, 340 while the camera's latitude is
-  easing, 200 while the disc is dimmed behind the scrim — and its limb carries a
-  sub-texel coverage alpha, drawn *outside* the arc clip, because canvas `clip()`
-  is not antialiased in Chrome.
+- **It is rastered and scaled** — 340 while the camera's latitude is easing, 200
+  while the disc is dimmed behind the scrim — and its limb carries a sub-texel
+  coverage alpha, drawn *outside* the arc clip, because canvas `clip()` is not
+  antialiased in Chrome.
+- ★ **The ceiling is the plate's own texel count, and it measures itself.** It was
+  700, and 700 was still a magnification everywhere that mattered: the disc is
+  `r · 2 · dpr` backing pixels across, which is 1 012 on a 412px phone and 1 572 on
+  a retina laptop, so the terrain was being blown up 1.45x and 2.25x with a
+  full-resolution coastline struck over the top of it. That is Theodor's "it feels
+  a bit blurry", and it is arithmetic rather than taste. `RASTER_MAX` is
+  `PLATE_W / 2` = **1 024** now — the visible hemisphere carries half the map
+  however big the disc is, so past that the raster really would only be magnifying
+  the plate's own bilinear filter. It costs 2.1x the pixels of 700, and what makes
+  that safe is that the pass **times itself**: two frames over half the 30 Hz
+  budget and it steps down `RASTER_LADDER` and stays there for that size and theme.
+  One guess for every device on Earth became a measurement per device.
 - **The per-ring land fills are gone.** 892 `Path2D` allocations and `fill()` calls
   per frame paid for the surface pass. Only the batched stroke remains.
+- ★ **The idle drift only runs where it can be seen, and that is a bug fix.**
+  Theodor: "the globe was spinning a lot in the opposite direction when you scroll
+  up or down." The drift is eastward and it accumulated on the *target* without
+  bound — including past the hero, where the disc is at 0.14 opacity and, while the
+  reader is moving, not painting at all. The next per-entry look-at then set the
+  target to a real venue longitude and threw all of it away at once, so the camera
+  unwound the whole accumulation westward at up to `MAX_TURN`. The size of the
+  reverse spin was proportional to how long the reader had been reading, which is
+  exactly why it looked random. It is gated on `dim >= DRIFT_DIM` now, and §02's
+  per-entry aim is *placed* rather than flown for the same reason the two chapter
+  aims already were: below that threshold there is nothing to animate for.
 
 ### §03 solves for lap time, not for geometry
 
@@ -239,12 +265,49 @@ and the two genuinely draw different lines, because a kart has more lateral grip
 a fraction of the power. The corridor is still 28px on screen at any zoom, roughly
 six times the real track width, and the legend still says so.
 
-### The panel's track layout is 3D
+### The track layouts are 3D — the panel's, and §03's racing line with them
 
 `js/layout3d.js`, and it is 1.x's venue map brought across: the layout on a plane
 tilted back 56°, drag to orbit, pinch or scroll to zoom, arrow keys, RESET VIEW, and
 a one-time reveal. There is **no elevation** — `data/atlas.js` has no height in it,
 so banking and gradient would be the only invented numbers on the page.
+
+★ **§03's figure is the same stage**, with a live canvas for its ground instead of
+an SVG. Theodor: "have the 3D track map, but with the racing line in that area — so
+you can interact with it, and you also see the racing line on the track itself." So
+the solved line, the tarmac it is solved inside and the 900 particles pacing
+themselves off the speed profile all lie on a plane the reader can turn. Three
+things about §03's stage differ from the panel's, and each is because it is a block
+in a scrolling page rather than an overlay the reader opened:
+
+- **`touch-action: pan-y`, not `none`.** A stage as tall as the phone that owns the
+  gesture outright is a place the page stops scrolling. Vertical drags go back to
+  the page; horizontal drags and pinches are the orbit and the zoom.
+- **A plain wheel scrolls the page** (`data-wheel="modifier"`); ctrl/⌘-wheel zooms,
+  which is also what a trackpad pinch sends.
+- **The stage is sized to the circuit, not the circuit to the stage.** `poseFit()`
+  inverts the projection: a plane w×h turned by θ about Z and φ about X lands on
+  screen as `w·|cos θ| + h·|sin θ|` by `(w·|sin θ| + h·|cos θ|)·cos φ`, plus the
+  room the tallest post needs. A 3:1 Gelleråsen in a fixed 560px box used a quarter
+  of it — that empty three quarters was "the circuit is really small for the area
+  itself". Both directions are solved, because a portrait lap is height-limited
+  rather than width-limited and Uddevalla clipped its own turn 6 off the top before
+  the height was fed back in.
+
+The other half of that complaint was in `js/circuit.js` and was not about the box
+at all: the numerals used to be drawn into the canvas *outside* the lap, so `fit()`
+reserved up to 118px on every side for them. On a phone that is 236px of a 370px
+canvas held for text. With the numbers on posts the reserve is the width of the road
+and a little air, and the drawing measures 0.77–0.99 of its canvas in both axes
+where it measured 0.73 × 0.34.
+
+★ **The pose is animated as registered custom properties, not as a transform.** The
+reveal used to be `transition: transform` on the plane, so for its 780ms the plane
+eased toward a pose while `--tilt` and `--rot` — which the numerals counter-rotate
+by — were already at the destination. The numbers swung out over the drawing, and
+Alviks Ring's turn 6 left the stage entirely. `@property` makes the three pose
+values interpolable, so everything downstream is derived from one set of numbers
+that is consistent at every frame rather than at its two ends.
 
 The corner numbers are the reason it is not just a CSS transform on the old SVG. A
 numeral lying flat on a plane turned back 56° is squashed to two fifths of its
@@ -437,11 +500,27 @@ FA2_PUPPETEER=…   puppeteer-core's ESM entry (resolved from node_modules if pr
 FA2_BASE=…        where the site is served   (default http://localhost:8766/)
 ```
 
-148 checks in headless Chrome: no page errors, every section renders the right
+206 checks in headless Chrome: no page errors, every section renders the right
 number of things, the numbers on the page equal the numbers in `data/atlas.js`,
 the countdown ticks, both pills work and persist, deep links land, nothing
 overflows sideways at 390 / 768 / 1440 / 1920, the panel routes and traps focus,
 gear ticks never touch 1.x's storage — and, from §10 on, **rendered geometry**.
+
+★ **The browser is recycled every eight pages, and without that the suite does not
+finish.** On Chrome 150 the browser process dies partway through a run and every
+`newPage()` after it fails with `Protocol error (Target.createTarget): Session with
+given id not found` — which reads like a puppeteer fault and is not one.
+Reproduced with nothing in the loop but open, wait, close, and against a checkout
+from several sessions back, so it is neither this page nor the GPU (`--disable-gpu`
+and `--disable-gpu-compositing` both survive a bare loop of eighteen and both still
+die here). It was landing at §10e, leaving §11, §12 and §13 unrun — and exiting on
+a **stack trace rather than a FAIL**, so a run that checked three quarters of the
+page looked like a crash rather than like an amber suite. Two real failures were
+sitting behind it: a numeral clipped off Alviks Ring's stage, and the whole of §12d
+and §13.
+
+If you add a check that needs two pages open at once — §4 and §11 both do — nothing
+special is required: `newPage()` only recycles when nothing of ours is open.
 
 That last section exists because of what session 3 found. The panel opened,
 routed, locked the scroll, trapped focus and closed again — with its card 11 169

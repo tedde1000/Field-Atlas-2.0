@@ -487,7 +487,53 @@ section { position: relative; }
 }
 .figure .cap .l { color: var(--accent); }
 .figure .cap .r { color: var(--ink-3); }
-#flow { display: block; width: 100%; height: clamp(340px, 56vh, 560px); }
+/* ★ §03's FIGURE IS THE PANEL'S 3D STAGE, WITH A CANVAS FOR ITS GROUND.
+ *
+ * Theodor: "have the 3D track map, but with the racing line in that area — so you
+ * can interact with it and stuff, and you also see the racing line on the track
+ * itself."
+ *
+ * So it reuses .p3d wholesale: the same perspective box, the same preserve-3d
+ * plane, the same posts, the same drag/pinch/arrow handlers out of js/layout3d.js.
+ * The only thing that differs is what lies on the plane — an SVG in the panel, a
+ * live canvas here, because the flow is 900 particles pacing themselves off the
+ * speed profile and nothing static can carry that. Everything below is the delta
+ * from .p3d, and there is deliberately not much of it. */
+
+/* the stage's height is written by renderFigure() off the circuit's own shape —
+   see poseFit() in js/layout3d.js for the derivation and for why a fixed height
+   is what left three quarters of the old box empty */
+.p3d--fig .p3d-stage {
+  height: var(--fig-h, clamp(320px, 46vh, 520px));
+  border: 0;                        /* .figure already draws the frame */
+  background: none;                 /* and its own inset */
+  margin-top: 44px;                 /* clear the caption */
+}
+/* ★ pan-y, NOT none — and this is the one place the panel's rule would be wrong.
+   .p3d-stage sets `touch-action: none` because a drag inside an overlay the reader
+   opened on purpose should own the gesture outright. This stage is a block in the
+   middle of a scrolling page and as tall as the phone, so `none` would make it a
+   dead zone the reader cannot scroll past — a trap, not a control. `pan-y` hands
+   vertical drags back to the page and keeps horizontal ones and pinches, which is
+   the orbit and the zoom; tilt stays on the arrow keys and on a mouse, where
+   touch-action does not apply at all. */
+.p3d--fig .p3d-stage { touch-action: pan-y; }
+/* ★ The width is WRITTEN by layoutFigure() in js/main.js, in px, and the value
+   here is only what stands until it runs — see the note there for why a portrait
+   lap cannot be left to a percentage. `max-height: none` for the same reason: the
+   stage is sized to the pose now, so the plane must not be second-guessed by a
+   bound derived from a height that was derived from it. 92% / 940px is also the
+   figure layoutFigure() reads back, so change both or neither. */
+.p3d--fig .p3d-plane {
+  width: var(--fig-pw, min(92%, 940px));
+  max-height: none;
+}
+/* the canvas IS the plane — same box, no letterbox, so a corner's position as a
+   fraction of the canvas is its position as a fraction of the plane */
+.p3d--fig .p3d-plane > canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+}
+.p3d--fig .p3d-bar { padding: 0 16px 14px; }
 
 .circuit-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: clamp(18px, 3vh, 30px); }
 .circuit-pick button {
@@ -825,11 +871,18 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
  * asserts every numeral lands inside the stage, which is what caught it. */
 .p3d-plane {
   position: relative;
-  /* 78%, not 88%: the plane is turned −18° about Z as well as tilted, so its
+  /* 73%, not 88%: the plane is turned −18° about Z as well as tilted, so its
      bounding box on screen is wider than the plane itself, and a corner number
      sitting outside the road on the far side then lands past the stage edge.
-     Alviks Ring lost turn 6 by 47px. */
-  width: min(78%, 600px);
+     Alviks Ring lost turn 6 by 47px.
+     ★ 78% was not quite enough and had gone unnoticed, because the run that
+     asserts this died three sections earlier — see newPage() in trace/verify.mjs.
+     Alviks Ring was still losing the right-hand half of turn 6, by 10px. A numeral
+     is centred on its post, so at the edge of the drawing half of it hangs past
+     the plane by construction, and the margin has to carry that. Swept across all
+     sixteen catalogue circuits: 78% fails on one, 74% clears every one, 73% is
+     that with a little room for a font metric to move under it. */
+  width: min(73%, 600px);
   /* over 100% on purpose: tilting back 56° foreshortens the plane to cos(56°) ≈
      0.56 of its height, so 118% projects to about two thirds of the stage and
      leaves the top third for the posts */
@@ -842,8 +895,41 @@ footer { border-top: 1px solid var(--hairline); padding: clamp(40px, 7vh, 80px) 
 }
 /* the ease is only ever on for the reveal and for RESET; a drag must track the
    finger exactly, and a transition on a dragged transform reads as lag */
-.p3d.is-revealing .p3d-plane { transition: transform .78s cubic-bezier(.2, .8, .25, 1); }
-body.no-motion .p3d .p3d-plane { transition: none; }
+/* ★ THE POSE IS ANIMATED, NOT THE TRANSFORM — AND THAT IS WHAT KEEPS THE NUMBERS
+ * OVER THEIR POSTS WHILE IT MOVES.
+ *
+ * The reveal used to be `transition: transform` on the plane. The plane then eased
+ * from one pose to the next while `--tilt` and `--rot` — which js/layout3d.js sets
+ * synchronously — were already at the destination, and .p3d-no counter-rotates by
+ * exactly those two. So for the 780ms of the reveal, and again for every RESET
+ * VIEW, the numerals were billboarded for a pose the plane had not reached: they
+ * swung out over the drawing, and on Alviks Ring turn 6 left the stage entirely and
+ * was clipped. verify.mjs §12c″ measures 240ms into the reveal and had been failing
+ * on exactly that, unseen, because the run died three sections earlier (see the
+ * note over newPage() there).
+ *
+ * Registering the three custom properties makes them interpolable, so the
+ * TRANSITION CAN LIVE ON THE POSE ITSELF. Everything downstream — the plane's
+ * transform, the posts' height, the numerals' counter-rotation — is then derived
+ * from one set of numbers that is consistent at every frame of the animation
+ * rather than at its two ends. There is no transform transition left to disagree
+ * with, which is why the old one is gone rather than kept alongside.
+ *
+ * The initial values are START in js/layout3d.js. They are worth having: an
+ * unregistered var with no value makes `rotateX(var(--tilt))` an invalid transform,
+ * which drops the WHOLE chain — so a stage rendered before mount() reached it used
+ * to appear flat and then snap. Change these and change START. */
+@property --tilt { syntax: '<angle>'; inherits: true; initial-value: 56deg; }
+@property --rot { syntax: '<angle>'; inherits: true; initial-value: -18deg; }
+@property --zoom { syntax: '<number>'; inherits: true; initial-value: 1; }
+
+.p3d.is-revealing {
+  transition:
+    --tilt .78s cubic-bezier(.2, .8, .25, 1),
+    --rot .78s cubic-bezier(.2, .8, .25, 1),
+    --zoom .78s cubic-bezier(.2, .8, .25, 1);
+}
+body.no-motion .p3d { transition: none; }
 
 .p3d-plane > .p-shape,
 .p3d-plane > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -1139,8 +1225,12 @@ body.no-motion .entry-open:hover svg { transform: none; }
   .entry, .mandate-grid { grid-template-columns: minmax(0, 1fr); }
   .mandate-h { max-width: none; }
   #globe-wrap { width: 100vmin; height: 100vmin; right: -40vmin; }
-  #globe { opacity: .5; }
-  :root[data-theme='day'] #globe { opacity: .2; }
+  /* ★ RAISED — see the note at the ≤460px block below, which is the one Theodor
+     was actually looking at. Same reasoning, one step less of it, because the
+     scrim here is still the horizontal wipe and already carries the left of the
+     page on its own. */
+  #globe { opacity: .68; }
+  :root[data-theme='day'] #globe { opacity: .27; }
   #scrim { background: linear-gradient(93deg, var(--bg) 0%, var(--bg) 34%, transparent 78%); }
   .p-grid { grid-template-columns: minmax(0, 1fr); }
 }
@@ -1163,9 +1253,26 @@ body.no-motion .entry-open:hover svg { transform: none; }
   .pill--go span { display: inline; }
   .hero-mark { display: none; }
   #globe-wrap { width: 141vmin; height: 141vmin; right: -60.5vmin; top: 40%; }
-  #globe { opacity: .34; }
-  :root[data-theme='day'] #globe { opacity: .16; }
-  #scrim { background: linear-gradient(180deg, transparent 0%, var(--bg) 78%); }
+  /* ★ THE PHONE HELD THE EARTH AT A THIRD, AND THAT IS WHAT "MAKE IT BRIGHTER"
+     WAS ABOUT.
+       Theodor, on the phone hero: "make the Earth a bit brighter." Nothing in
+     js/globe.js is doing anything different here — the shading, the sun and the
+     relief are identical to the wide page, which runs the same disc at full
+     strength. The whole of the difference was this one declaration: 0.34, so a
+     planet rendered to be looked at arrived at a third of the light it was drawn
+     with, and the terrain went with it.
+       It is held back at all because #scrim below is a VERTICAL wipe at this
+     width, not the horizontal one the wide layout gets — the hero's copy sits over
+     the top of the disc rather than beside it, so the globe has to give the type
+     room by being dimmer rather than by being elsewhere. 0.58 is the most it can
+     take while the lede is still comfortably over it; the title, at 900 weight and
+     cream, was never the constraint. The scrim's own ramp is pulled up to meet it,
+     which is what buys those last few points back — see below. */
+  #globe { opacity: .58; }
+  :root[data-theme='day'] #globe { opacity: .24; }
+  /* reaching the page colour by 68% rather than 78%: the lede is the lowest thing
+     in the hero and the brighter disc is loudest exactly there */
+  #scrim { background: linear-gradient(180deg, transparent 0%, var(--bg) 68%); }
   /* the volume line does not fit beside the rule at this width, and the readouts
      below carry the same three numbers anyway */
   .kicker .r { display: none; }

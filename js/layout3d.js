@@ -53,6 +53,51 @@ const ZOOM_MIN = 0.55, ZOOM_MAX = 2.6;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
 
+/* ★ HOW TALL A PLANE OF A GIVEN SHAPE IS ONCE IT HAS BEEN STOOD IN THE SCENE.
+ *
+ * The panel gets a fixed-height stage and lets a wide circuit sit short inside it,
+ * which is fine for a card the reader opened on purpose. §03 is a figure in the
+ * scroll, it is the biggest single block on the page, and Theodor's note about it
+ * is that "the circuit is really small for the area itself" — a 3:1 Gelleråsen on
+ * a plane turned back 56° projects to about a quarter of a 560px box, and the
+ * other three quarters were empty. The answer is not to magnify the drawing past
+ * the width it has; it is to stop reserving height nothing can ever use.
+ *
+ * So the stage is sized to the pose rather than the pose fitted into the stage.
+ * The transform is `rotateX(φ) rotateZ(θ)`, so a plane w×h lands on screen as
+ *
+ *     width  = w·|cos θ| + h·|sin θ|
+ *     height = (w·|sin θ| + h·|cos θ|) · cos φ
+ *
+ * — the Z-rotation swings the rectangle out to a bigger axis-aligned box, and the
+ * X-rotation then foreshortens what is left. Two things are added to the height:
+ * the posts, which rise `lift·k` off the plane and project `sin φ` of that
+ * upward at the tallest tier, and one numeral box for the label riding the top of
+ * the tallest one. Perspective is ignored — at 1250px of it against a ~400px
+ * plane the correction is under 3%, and every term here is already an estimate
+ * feeding a clamp.
+ *
+ * `availH` is optional and is the other half of the same job: a PORTRAIT lap is
+ * not width-limited, it is height-limited, and left to the width alone Uddevalla
+ * came out 1 180px tall inside a 648px stage with turn 6 clipped off the top. Every
+ * term above is proportional to the plane's width except the numeral box, so
+ * inverting it for a height is exact rather than iterative.
+ *
+ * Returns { w, h } for the PLANE, in px, plus the height it projects to.
+ */
+export function poseFit(aspect, availW, availH = Infinity, { lift = 0.095, tiers = 1.95, cap = 26 } = {}) {
+  const rad = Math.PI / 180;
+  const ct = Math.abs(Math.cos(START.rot * rad)), st = Math.abs(Math.sin(START.rot * rad));
+  const cf = Math.cos(START.tilt * rad), sf = Math.sin(START.tilt * rad);
+  const a = Math.max(0.05, aspect);
+  // screen height per unit of plane width, projection and posts together
+  const K = (st + ct / a) * cf + lift * Math.max(1, 1 / a) * tiers * sf;
+  // widest plane whose projected width still fits: w·ct + (w/a)·st <= availW
+  let w = availW / (ct + st / a);
+  if (Number.isFinite(availH)) w = Math.min(w, Math.max(40, (availH - cap) / K));
+  return { w, h: w / a, screenH: w * K + cap };
+}
+
 /**
  * Wire every `[data-layout3d]` inside `root`. Idempotent: a node that has
  * already been wired is skipped, so the panel can re-render in place (a gear
@@ -142,11 +187,22 @@ function wire(host) {
 
   /* ★ NOT passive, and it must not be: the wheel here zooms the model, and
      without preventDefault the page scrolls out from under it at the same time.
-     `touch-action: none` in app.css is the same guarantee for touch. */
+     `touch-action: none` in app.css is the same guarantee for touch.
+
+     ★ `data-wheel="modifier"` REVERSES THAT, and §03 sets it. Swallowing the
+     wheel is right for a panel the reader opened on purpose and covers the page;
+     it is wrong for a figure sitting in the middle of the scroll, where it turns
+     the biggest block on the page into somewhere the reader's scroll wheel stops
+     working. Held behind ctrl/⌘ instead, which is also what a trackpad pinch
+     sends, so the gesture that means zoom everywhere else means zoom here too and
+     a plain wheel goes to the page. */
+  const wheelNeedsMod = host.dataset.wheel === 'modifier';
   stage.addEventListener('wheel', (e) => {
+    if (wheelNeedsMod && !(e.ctrlKey || e.metaKey)) return;   // let the page have it
     e.preventDefault();
     view.zoom = clamp(view.zoom * Math.pow(0.9988, e.deltaY), ZOOM_MIN, ZOOM_MAX);
     apply();
+    host.classList.remove('is-revealing');
   }, { passive: false });
 
   /* ---------------------------------------------------------- keyboard
@@ -221,6 +277,26 @@ function wire(host) {
  * ========================================================================= */
 
 /**
+ * Post heights for a lap's worth of marks — see the note inside stage3d() for
+ * what the tiers are for. `pts` are {x, y} in any one consistent unit and `long`
+ * is the drawing's long side in that same unit.
+ *
+ * @returns {number[]} one multiplier per mark, in lap order
+ */
+export function tierMarks(pts, long) {
+  const TIERS = [1, 1.5, 1.95];
+  let tier = 0;
+  return pts.map((m, i) => {
+    if (i > 0) {
+      const p = pts[i - 1];
+      const near = Math.hypot(m.x - p.x, m.y - p.y) < long * 0.20;
+      tier = near ? (tier + 1) % TIERS.length : 0;
+    }
+    return TIERS[tier];
+  });
+}
+
+/**
  * @param {string} svg     the layout, already rendered, with its own viewBox
  * @param {object} vb      {x, y, w, h} — the same viewBox, parsed
  * @param {Array}  marks   [{no, label, x, y}] in viewBox units
@@ -256,17 +332,11 @@ export function stage3d(svg, vb, marks, label) {
    * they simply stand at different heights, which is what separates them on
    * screen. The test is distance in the DRAWING, so it is the same decision at
    * every zoom, and lap order makes it stable — the same circuit always tiers the
-   * same way. */
-  const TIERS = [1, 1.5, 1.95];
-  let tier = 0;
-  const tiered = marks.map((m, i) => {
-    if (i > 0) {
-      const p = marks[i - 1];
-      const near = Math.hypot(m.x - p.x, m.y - p.y) < long * 0.20;
-      tier = near ? (tier + 1) % TIERS.length : 0;
-    }
-    return { ...m, k: TIERS[tier] };
-  });
+   * same way. It is exported because §03's figure stands the same numbers over the
+   * same circuits and must crowd them identically — see renderFigure() in
+   * js/main.js. */
+  const ks = tierMarks(marks, long);
+  const tiered = marks.map((m, i) => ({ ...m, k: ks[i] }));
 
   const posts = tiered.map(m => `
     <div class="p3d-mark" style="left:${pct((m.x - vb.x) / vb.w)};top:${pct((m.y - vb.y) / vb.h)};--k:${m.k}">

@@ -44,11 +44,52 @@ const ok = (cond, name, extra = '') => {
   else { fail++; console.log('  FAIL  ' + name + (extra ? '  — ' + extra : '')); }
 };
 
-const browser = await puppeteer.launch({
+/* ★ THE BROWSER IS RECYCLED, AND WITHOUT THAT THIS SUITE DOES NOT FINISH.
+ *
+ * On Chrome 150 the browser process dies partway through a run, and every
+ * newPage() after it fails with `Protocol error (Target.createTarget): Session
+ * with given id not found` — which reads like a puppeteer fault and is not one.
+ * It landed on the sixteenth page, deterministically, killing the run at §10e
+ * with §11, §12 and §13 unrun: the .dc.html pair, the racing line and the sun,
+ * none of them checked, and the script exiting on a stack trace rather than on a
+ * FAIL — so the failure did not even look like one.
+ *
+ * It is not this page. Reproduced with nothing in the loop but open, wait, close,
+ * and against a checkout from several sessions back. It is not the GPU either:
+ * `--disable-gpu` and `--disable-gpu-compositing` both survive a bare loop of
+ * eighteen and both still die here, so whatever leaks is proportional to what the
+ * pages DO, not to how many there are.
+ *
+ * So the suite stops depending on one browser lasting the whole run. Pages are
+ * counted, the browser is replaced every RECYCLE_AFTER of them, and a browser
+ * that has died anyway is replaced on sight. Nothing is shared between pages —
+ * every check opens with localStorage cleared and asserts against a fresh boot —
+ * so a new process is not a weaker test, and §9's seeded storage goes in through
+ * evaluateOnNewDocument, which is per page. */
+const RECYCLE_AFTER = 8;
+const launch = () => puppeteer.launch({
   executablePath: findChrome(),
   headless: true,
   args: LAUNCH_ARGS,
 });
+let browser = await launch();
+let opened = 0;
+async function newPage() {
+  const dead = !browser.connected;
+  /* ★ Only between checks, never mid-check. §4 and §11 hold two pages at once —
+     a second window for the persistence tests, and one on file:// beside one on
+     http:// — and closing the browser under them would take the page the check is
+     halfway through. `browser.pages()` counts the initial about:blank, so one page
+     means nothing of ours is open. */
+  const idle = dead || (await browser.pages()).length <= 1;
+  if (dead || (idle && opened >= RECYCLE_AFTER)) {
+    try { await browser.close(); } catch {}
+    browser = await launch();
+    opened = 0;
+  }
+  opened++;
+  return browser.newPage();
+}
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /**
@@ -60,7 +101,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
  *              only way to exercise the shared-storage path locally.
  */
 async function open(hash = '', vw = 1440, vh = 900, seed = null) {
-  const page = await browser.newPage();
+  const page = await newPage();
   page.__errs = [];
   page.on('pageerror', e => page.__errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') page.__errs.push(m.text()); });
@@ -196,7 +237,7 @@ await p.close();
  * is visible rather than silent. With `off` stored, the stored answer wins — the
  * media query is a first-run hint and nothing more. */
 {
-  const rp = await browser.newPage();
+  const rp = await newPage();
   await rp.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
   await rp.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   await rp.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch {} });
@@ -215,7 +256,7 @@ await p.close();
      'and the media query is no longer a second, unreachable authority');
   await rp.close();
 
-  const sp = await browser.newPage();
+  const sp = await newPage();
   await sp.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
   await sp.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   await sp.evaluateOnNewDocument(() => {
@@ -1003,7 +1044,7 @@ const refShape = JSON.stringify(await shapeOf(p));
 await p.close();
 
 for (const [label, file, hasThumb] of DOCS) {
-  const page = await browser.newPage();
+  const page = await newPage();
   page.__errs = [];
   page.on('pageerror', e => page.__errs.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') page.__errs.push(m.text()); });
@@ -1026,7 +1067,7 @@ for (const [label, file, hasThumb] of DOCS) {
 }
 
 /* -- 11c · ★ the standalone must work with NO SERVER ---------------------- */
-const filePage = await browser.newPage();
+const filePage = await newPage();
 filePage.__errs = [];
 filePage.on('pageerror', e => filePage.__errs.push(String(e)));
 await filePage.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
@@ -1425,13 +1466,38 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     `plateKind=${g0.plateKind}`);
   ok(/lights/.test(g0.plateKind || ''),
     'with the city lights channel in it', `plateKind=${g0.plateKind}`);
-  /* ★ 700, raised from 420 in session 6. The cap is what stops the per-pixel pass
-     running away, and it moved because the geometry cache (see GEO in js/globe.js)
-     halved the per-frame cost — not because the budget got looser. The number here
-     tracks RASTER_MAX; if it ever needs raising again, the frame time is what has
-     to have been measured first. */
-  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 700,
+  /* ★ 1 024, raised from 700, and the number is no longer a stopwatch reading.
+     It is PLATE_W / 2 — the texels the visible hemisphere actually carries — so
+     past it the raster can only magnify the plate's own bilinear filter. 700 was
+     an upscale everywhere it mattered: 1.45x on a phone hero, 2.25x on a retina
+     laptop, which is what "it feels a bit blurry" was. See RASTER_MAX. */
+  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 1024,
     'the surface raster stays inside its cap', `raster=${g0.raster}`);
+  /* ★ AND IT IS NOT AN UPSCALE ANY MORE. The cap alone does not say that: a
+     ceiling of 1 024 with a raster still stuck at 700 would pass it and look
+     exactly as soft as before. What the fix promises is that the raster reaches
+     the disc's own device resolution wherever the plate can supply it, so assert
+     the RATIO between the two. At 1440x900 with dsf 1 the disc is 786 device px
+     and the plate can cover all of it, so this is 1:1. */
+  const upscale = await page.evaluate(() => {
+    const c = document.getElementById('globe');
+    // the disc, in backing-store pixels — the same expression js/globe.js sizes by
+    const wrap = document.getElementById('globe-wrap').getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = (Math.min(wrap.width, wrap.height) / 2 - 2) / 1.14;
+    return { disc: Math.round(r * 2 * dpr), raster: Number(c.dataset.raster) };
+  });
+  ok(upscale.raster >= Math.min(1024, upscale.disc) - 2,
+    '★ and it is not magnified — the raster reaches the disc, or the plate\'s limit',
+    `raster=${upscale.raster} disc=${upscale.disc}`);
+  /* the ladder in js/globe.js only descends, so a machine that cannot hold the
+     budget is indistinguishable from one that never had to unless the rung is
+     published too. Under swiftshader the pass measures ~13ms against a 16ms
+     budget, so the top rung is expected here; if this ever fails it is a real
+     statement about the renderer, not a flake. */
+  ok(Number(g0.rasterCap) === 1024,
+    'the surface pass held its frame budget at full resolution',
+    `cap=${g0.rasterCap} ms=${g0.surfMs}`);
   ok(g0.sunLock === 'camera',
     '★ the light is locked to the camera', `sunLock=${g0.sunLock}`);
   ok(Number(g0.sunLit) > 0.75,
@@ -1545,6 +1611,236 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   const css = readFileSync(path.join(HERE, '..', 'assets', 'app.css'), 'utf8');
   ok(!/#reticle\s*\{/.test(css), 'app.css no longer styles a reticle');
   ok(!/\.p-shape path\.glow/.test(css), 'app.css no longer fills the inside of a lap');
+}
+
+/* ============================================================== 13 · SESSION 7
+ * Three things Theodor reported, and the checks that stop each coming back.
+ *
+ *   "make the Earth a bit brighter, plus add a bit of resolution — it feels a
+ *    bit blurry"                                        -> 13a, plus §12d′ above
+ *   "the globe was spinning a lot in the opposite direction when you scroll up
+ *    or down — definitely a bug"                        -> 13b
+ *   "the circuit is really small for the area itself; have the 3D track map but
+ *    with the racing line in that area"                 -> 13c
+ * ========================================================================= */
+console.log('\n13 · session 7 — the globe, the spin, and §03 in three dimensions');
+
+/* -- 13a · ★ THE EARTH IS NOT HELD AT A THIRD ON A PHONE -------------------
+ * The whole of "make it brighter" was one declaration: #globe sat at 0.34 opacity
+ * under 460px and 0.5 under 1080px, so a planet rendered to be looked at arrived
+ * at a third of the light it was drawn with. Asserted as the COMPUTED opacity at
+ * each width rather than by reading the stylesheet, because what a media query
+ * actually resolves to is the thing that was wrong. */
+{
+  for (const [w, h, floor] of [[412, 846, 0.5], [820, 1100, 0.6], [1440, 900, 0.99]]) {
+    const q = await open('', w, h);
+    await sleep(1800);
+    const o = await q.evaluate(() => Number(getComputedStyle(document.getElementById('globe')).opacity));
+    ok(o >= floor, `the globe is not dimmed away at ${w}px`, `opacity=${o}`);
+    await q.close();
+  }
+}
+
+/* -- 13b · ★ SCROLLING MUST NOT SPIN THE PLANET BACKWARDS -------------------
+ *
+ * The mechanism, in full, because the symptom looked random and was not: the idle
+ * drift is eastward and it accumulated on the TARGET without bound, including
+ * everywhere it could not be seen — past the hero the disc is at 0.14 opacity
+ * behind #scrim and, while the reader is moving, setBusy() stops it painting at
+ * all. Then the next per-entry look-at set the target to a real venue longitude,
+ * throwing all of it away at once, and the camera unwound the lot westward at up
+ * to MAX_TURN. The size of the reverse spin was therefore proportional to how long
+ * the reader had been reading, which is why it never showed up in a quick pass.
+ *
+ * Two independent assertions, because either fix alone leaves the bug reachable:
+ * that a dimmed globe does not accumulate drift at all, and that a full pass down
+ * the page and back never turns the camera westward by more than a whisker. */
+{
+  const q = await open('', 412, 846);
+  await sleep(2200);
+  const cam = () => q.evaluate(() => {
+    const c = document.getElementById('globe');
+    return {
+      lon: Number(c.dataset.lon), lat: Number(c.dataset.lat),
+      dim: Number(getComputedStyle(document.getElementById('globe-wrap')).opacity),
+    };
+  });
+  /* park well past the hero, sit still, and watch the target */
+  await q.evaluate(() => window.scrollTo({ top: 4200, behavior: 'instant' }));
+  await sleep(1500);
+  const d0 = await cam();
+  await sleep(2500);
+  const d1 = await cam();
+  ok(Math.abs(d1.lon - d0.lon) < 0.6,
+    '★ a dimmed globe does not accumulate drift it will have to pay back',
+    `${d0.lon} -> ${d1.lon} over 2.5s`);
+
+  /* Now the reader's actual trip: down through the season and back up to the top,
+     sampling the camera the whole way. Westward is negative; the idle drift is
+     +0.9°/s, so anything past a couple of degrees between two samples is the
+     planet turning the wrong way.
+     ★ SCORED ONLY WHERE THE GLOBE CAN BE SEEN, and that is the fix's actual
+     promise rather than a weaker version of it. Below `dim` 0.5 an aim is PLACED
+     and not flown — see lookAt() — so a reader who idled on the hero long enough
+     for the drift to build does still get one large correction on the way down.
+     Measured on a phone with a 25s hero idle: 22.5° of drift, discharged in a
+     single sample at dim 0.14, where the disc is at 8% effective opacity behind
+     #scrim and, while the reader is moving, not painting at all. A placement is
+     not a spin. What must never happen is a westward TURN somewhere the reader is
+     looking, and the same run measures that at −2.7° — the camera settling back on
+     to the hero's aim over a fifth of a second. */
+  let worst = 0, worstAt = '';
+  let prev = (await cam()).lon;
+  const step = async (y) => {
+    await q.evaluate((t) => window.scrollTo({ top: t, behavior: 'instant' }), y);
+    await sleep(220);
+    const now = await cam();
+    const d = ((now.lon - prev + 540) % 360) - 180;   // signed shortest way round
+    if (now.dim >= 0.35 && d < worst) { worst = d; worstAt = `y=${y} dim=${now.dim.toFixed(2)}`; }
+    prev = now.lon;
+  };
+  for (let y = 0; y <= 9000; y += 750) await step(y);
+  await sleep(1200); prev = (await cam()).lon;
+  for (let y = 9000; y >= 0; y -= 750) await step(y);
+  ok(worst > -4,
+    '★ and no scroll turns it westward where the reader can see it',
+    `worst step ${worst.toFixed(2)}°${worstAt ? ' at ' + worstAt : ''}`);
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'a full pass down the page and back raises no page errors', q.__errs.join(' | '));
+  await q.close();
+}
+
+/* -- 13c · ★ §03 IS THE 3D STAGE, AND THE CIRCUIT FILLS IT ------------------
+ *
+ * "The circuit is really small for the area itself." It was: the corner numerals
+ * were drawn into the canvas outside the lap, so js/circuit.js reserved up to
+ * 118px on every side for them, and on a phone the drawing got a third of the
+ * width it had room for with a field of empty graph paper under it. Measured on
+ * the PIXELS — the fraction of the canvas the drawing actually inks — because
+ * that is the complaint, and no amount of markup asserts it. */
+{
+  for (const [w, h] of [[412, 846], [1440, 900]]) {
+    const q = await open('#anatomy', w, h);
+    await sleep(3200);
+    const fig = await q.evaluate(() => {
+      const c = document.getElementById('flow');
+      const host = document.getElementById('fig-3d');
+      const stage = host.querySelector('.p3d-stage');
+      const g = c.getContext('2d');
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+        if (d[(y * c.width + x) * 4 + 3] > 12) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+      const sb = stage.getBoundingClientRect();
+      let spill = 0;
+      for (const t of host.querySelectorAll('.p3d-no')) {
+        const r = t.getBoundingClientRect();
+        if (r.width === 0) continue;
+        if (r.left < sb.left - 1 || r.right > sb.right + 1 ||
+            r.top < sb.top - 1 || r.bottom > sb.bottom + 1) spill++;
+      }
+      return {
+        onStage: !!c.closest('.p3d-plane'),
+        marks: host.querySelectorAll('.p3d-mark').length,
+        corners: Number(c.dataset.corners),
+        fw: (x1 - x0) / c.width, fh: (y1 - y0) / c.height,
+        spill, touch: getComputedStyle(stage).touchAction,
+        paints: Number(c.dataset.paints || 0),
+      };
+    });
+    ok(fig.onStage, `§03's canvas is the ground of the 3D stage at ${w}px`);
+    ok(fig.paints > 0, `and it is actually painting at ${w}px`, `paints=${fig.paints}`);
+    /* ★ The number that was the complaint. Before this work the phone measured
+       0.73 x 0.34 — a lap using a third of the height it had. */
+    ok(fig.fw > 0.7 && fig.fh > 0.7,
+      `★ the circuit fills its area at ${w}px — no reserve for labels that left it`,
+      `${fig.fw.toFixed(2)} x ${fig.fh.toFixed(2)}`);
+    ok(fig.marks === fig.corners && fig.marks > 0,
+      `every corner stands on a post at ${w}px`, `${fig.marks} posts / ${fig.corners} corners`);
+    ok(fig.spill === 0, `and none of them is clipped by the stage at ${w}px`, `${fig.spill} outside`);
+    /* ★ pan-y, not none. .p3d-stage takes the gesture outright inside a panel the
+       reader opened on purpose; this one is a block in the middle of the scroll and
+       as tall as the phone, so `none` would be a place the page stops scrolling. */
+    ok(/pan-y/.test(fig.touch), `the figure does not trap the page scroll at ${w}px`, fig.touch);
+    await q.close();
+  }
+
+  /* it is a CONTROL, not a picture: it orbits, it resets, and a plain wheel still
+     belongs to the page — see the `data-wheel="modifier"` note in js/layout3d.js */
+  const q = await open('#anatomy', 1440, 900);
+  await sleep(3000);
+  const pose = () => q.evaluate(() => ({ ...document.getElementById('fig-3d').dataset }));
+  const start = await pose();
+  const at = await q.evaluate(() => {
+    const r = document.querySelector('#fig-3d .p3d-stage').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await q.mouse.move(at.x, at.y);
+  await q.mouse.down();
+  await q.mouse.move(at.x + 130, at.y - 45, { steps: 8 });
+  await q.mouse.up();
+  await sleep(320);
+  const dragged = await pose();
+  ok(Math.abs(Number(dragged.rot) - Number(start.rot)) > 8 &&
+     Math.abs(Number(dragged.tilt) - Number(start.tilt)) > 4,
+    '★ the racing line orbits — §03 is a control, not a picture',
+    `${start.tilt}/${start.rot} -> ${dragged.tilt}/${dragged.rot}`);
+  await q.evaluate(() => document.querySelector('#fig-3d .p3d-reset').click());
+  await sleep(950);
+  const reset = await pose();
+  ok(reset.tilt === start.tilt && reset.rot === start.rot && reset.zoom === start.zoom,
+    'and RESET VIEW puts it back exactly where it started',
+    `${reset.tilt}/${reset.rot}/${reset.zoom}`);
+
+  const y0 = await q.evaluate(() => Math.round(window.scrollY));
+  await q.mouse.move(at.x, at.y);
+  await q.mouse.wheel({ deltaY: 320 });
+  await sleep(900);
+  const y1 = await q.evaluate(() => Math.round(window.scrollY));
+  ok(y1 > y0 + 100 && (await pose()).zoom === reset.zoom,
+    '★ a plain wheel over the figure scrolls the page rather than zooming it',
+    `scrollY ${y0} -> ${y1}`);
+  /* re-acquire the stage before the second gesture: the check above just moved the
+     page 300px under the cursor, which is the whole point of it, and a wheel aimed
+     at where the stage USED to be proves nothing about the stage */
+  const at2 = await q.evaluate(() => {
+    const r = document.querySelector('#fig-3d .p3d-stage').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await q.mouse.move(at2.x, at2.y);
+  await q.keyboard.down('Control');
+  await q.mouse.wheel({ deltaY: -420 });
+  await q.keyboard.up('Control');
+  await sleep(320);
+  ok(Number((await pose()).zoom) > Number(reset.zoom) + 0.05,
+    'and ctrl-wheel — which is also what a trackpad pinch sends — zooms it',
+    `zoom=${(await pose()).zoom}`);
+  await q.close();
+}
+
+/* -- 13d · the sources still say what they do ------------------------------ */
+{
+  const globe = readFileSync(path.join(HERE, '..', 'js', 'globe.js'), 'utf8');
+  const css = readFileSync(path.join(HERE, '..', 'assets', 'app.css'), 'utf8');
+  const circuit = readFileSync(path.join(HERE, '..', 'js', 'circuit.js'), 'utf8');
+  ok(/const RASTER_MAX = PLATE_W \/ 2/.test(globe),
+    'the raster ceiling is the plate\'s own texel count, not a stopwatch reading');
+  ok(/RASTER_LADDER/.test(globe) && /SURFACE_BUDGET_MS/.test(globe),
+    'and it backs off on a machine that cannot hold the budget');
+  ok(/state\.dim >= DRIFT_DIM/.test(globe),
+    'the idle drift is gated on the globe being visible');
+  /* ★ The registered properties are what keep a numeral over its post through the
+     reveal — see the note in app.css. Without them the transition goes back on
+     `transform` and §12c″ starts clipping corners again. */
+  ok(/@property --tilt/.test(css) && /@property --rot/.test(css),
+    'the 3D pose is animated as registered properties, not as a transform');
+  ok(!/\.p3d\.is-revealing \.p3d-plane\s*\{\s*transition: transform/.test(css),
+    'and there is no transform transition left to disagree with it');
+  ok(/offsetWidth/.test(circuit) && /getBoundingClientRect/.test(circuit),
+    'the figure measures its layout box, not its transformed one');
 }
 
 await browser.close();

@@ -116,10 +116,45 @@ const NIGHT = 0.085;
  * longitude it can be computed once and reused. That halves the per-frame cost,
  * and 700 then lands at ~20 ms with headroom.
  *
- * 700 rather than higher because the plate is 2048 wide: the visible hemisphere
- * carries 1 024 texels however big the disc is, so past about a thousand the
- * raster is only magnifying the plate's own bilinear filter and buying nothing. */
-const RASTER_MAX = 700;
+ * ★ AND 700 WAS STILL AN UPSCALE EVERYWHERE IT MATTERED.
+ *
+ * Theodor, on the phone hero and on the wide page both: "make the Earth a bit
+ * brighter, plus add a bit of resolution — it feels like it's a bit blurry."
+ *
+ * It was, and the arithmetic says exactly how blurry. The disc is `r * 2 * dpr`
+ * device pixels across, and `dpr` here is the CANVAS dpr, capped at 2. On a
+ * 412px phone `#globe-wrap` is 141vmin, so the disc is 506 CSS px — 1 012
+ * backing pixels, fed from a 700px raster: a 1.45x magnification of the terrain
+ * with a full-resolution coastline struck over the top of it, which is the exact
+ * "sharp outline round a soft picture" the paragraph above says was fixed. On a
+ * retina laptop at 1440 it is worse: 1 572 backing pixels off the same 700.
+ *
+ * So the ceiling is now the PLATE'S OWN texel count rather than a number picked
+ * off a stopwatch — `PLATE_W / 2` = 1 024, because the visible hemisphere is half
+ * the map however big the disc is, and past that the raster really would only be
+ * magnifying the plate's bilinear filter. At the two sizes above that is 1:1 and
+ * 1.53x respectively, where it was 1.45x and 2.25x.
+ *
+ * What makes it affordable is not that it is free — it is 2.1x the pixels of 700
+ * — but that it BACKS OFF WHEN IT IS NOT. See rasterCeiling(): the pass times
+ * itself, and a machine that cannot hold the budget walks down the ladder and
+ * stays there. The old constant was one guess for every device on Earth. */
+const RASTER_MAX = PLATE_W / 2;
+
+/* ★ THE BACKOFF LADDER, AND WHY IT ONLY EVER GOES DOWN.
+ *
+ * Changing the raster size reallocates the surface canvas, its ImageData and the
+ * whole geometry cache (see GEO) — so a size that oscillates costs far more than
+ * the resolution it is chasing. The ladder is therefore sticky: two overruns in a
+ * row steps down one rung and it stays there for the life of the current size and
+ * theme. resize() and a theme change reset it to the top, because both already
+ * throw the caches away and both are the moments where the right answer may
+ * genuinely have changed.
+ *
+ * The budget is half the 30 Hz frame, which is what the surface pass may have:
+ * the coastline stroke, the graticule, the pins and the composite share the rest. */
+const RASTER_LADDER = [RASTER_MAX, 880, 760, 640, 520, 420];
+const SURFACE_BUDGET_MS = 16;
 
 /* While the camera's LATITUDE is still easing, the raster drops to this. See
    GEO: a latitude change is the one thing that invalidates the geometry cache,
@@ -164,6 +199,13 @@ const angleDelta = (a, b) => ((b - a + 540) % 360) - 180;
  * speed" actually means, and it costs nothing when the target is near: 34°/s is
  * well above the 0.9°/s idle drift, so idling is untouched. */
 const MAX_TURN = 34;
+
+/* Above this wrapper opacity the globe is the SUBJECT; below it, it is a backdrop
+   behind the chapters. Two things read it — whether the idle drift runs at all,
+   and whether a look-at is flown or simply placed — and they have to agree, or the
+   camera can accumulate motion in a state where it is never allowed to spend it.
+   See the drift gate in frame() and `settled` in lookAt(). */
+const DRIFT_DIM = 0.5;
 
 /* ============================================================ THE POINT CACHE
  * A point's latitude and longitude never change — only the camera does. So each
@@ -323,6 +365,8 @@ export function createGlobe(canvas, opts = {}) {
     // the canvas or it gets clipped to the canvas rectangle. See HALO above.
     state.r = (Math.min(state.w, state.h) / 2 - 2) / HALO;
     layers.dirty = true;
+    /* a different disc is a different sum — re-try from the top of the ladder */
+    cost.rung = 0; cost.over = 0; cost.ms = 0;
   }
 
   /* ================================================= the cached still layer
@@ -367,6 +411,9 @@ export function createGlobe(canvas, opts = {}) {
     layers.ink = tok('--ink', '#ece5d9');
     layers.theme = isDay ? 'day' : 'night';
     layers.dirty = false;
+    /* the day side runs a different gain and a different plate cost — re-measure
+       rather than carry a night-side verdict across, and see resize() */
+    cost.rung = 0; cost.over = 0; cost.ms = 0;
   }
 
   /* ======================================================= THE SURFACE PASS
@@ -401,13 +448,30 @@ export function createGlobe(canvas, opts = {}) {
    * ==================================================================== */
   const surf = { c: null, g: null, img: null, size: 0 };
 
+  /* ★ WHAT THIS MACHINE CAN ACTUALLY AFFORD, measured rather than assumed. See
+     RASTER_LADDER. `rung` only ever descends; resize() and buildLayers() put it
+     back to 0, because both already discard every cache this could invalidate. */
+  const cost = { rung: 0, over: 0, ms: 0 };
+  const rasterCeiling = () => RASTER_LADDER[cost.rung];
+  function chargeSurface(ms) {
+    cost.ms = cost.ms ? cost.ms * 0.7 + ms * 0.3 : ms;
+    /* Two in a row, not one: a single long frame is a garbage collection or a
+       decode landing, and stepping down on it would cost the reader resolution
+       for the life of the page over one unrelated stall. */
+    if (cost.ms > SURFACE_BUDGET_MS) {
+      if (++cost.over >= 2 && cost.rung < RASTER_LADDER.length - 1) {
+        cost.rung++; cost.over = 0; cost.ms = 0;
+      }
+    } else cost.over = 0;
+  }
+
   function surfaceSize() {
     /* Past the hero the disc is at ~14% opacity behind #scrim, and nobody can see
        a texel there — so it rasters at 200px and the per-pixel cost drops by two
        thirds exactly where it is least worth paying. Above that it is the subject,
        unless the camera's latitude is still easing — see RASTER_MOVING. */
     const cap = state.dim < 0.35 ? 200
-      : (Math.abs(state.tLat - state.lat) > 0.04 ? RASTER_MOVING : RASTER_MAX);
+      : (Math.abs(state.tLat - state.lat) > 0.04 ? RASTER_MOVING : rasterCeiling());
     return Math.min(cap, Math.max(16, Math.round(state.r * 2 * state.dpr)));
   }
 
@@ -550,6 +614,13 @@ export function createGlobe(canvas, opts = {}) {
     const key = R + '|' + state.lat.toFixed(1) + '|' + (isDay ? 'd' : 'n');
     if (geo.key !== key) { buildGeo(R, isDay); geo.key = key; }
 
+    /* ★ The clock starts AFTER the geometry build, deliberately. buildGeo() is
+       amortised — at the hero it runs once for the life of the page — so charging
+       it to the frame budget would walk the ladder down over a cost that is not
+       paid per frame. What is timed is exactly what repeats: the sample loop and
+       the putImageData. */
+    const t0 = performance.now();
+
     const out = surf.img.data;
     out.fill(0);
 
@@ -569,6 +640,7 @@ export function createGlobe(canvas, opts = {}) {
         out[o + 3] = al[i];
       }
       surf.g.putImageData(surf.img, 0, 0);
+      chargeSurface(performance.now() - t0);
       return surf.c;
     }
 
@@ -610,6 +682,7 @@ export function createGlobe(canvas, opts = {}) {
     }
 
     surf.g.putImageData(surf.img, 0, 0);
+    chargeSurface(performance.now() - t0);
     return surf.c;
   }
 
@@ -864,7 +937,32 @@ export function createGlobe(canvas, opts = {}) {
 
       state.lon += dLon;
       state.lat += dLat;
-      if (now > state.holdUntil) {
+      /* ★ THE IDLE DRIFT ONLY RUNS WHERE ANYONE CAN SEE IT, AND THAT IS THE FIX
+       * FOR THE PLANET SPINNING BACKWARDS.
+       *
+       * Theodor: "I just saw the globe spinning a lot in the opposite direction
+       * when you scroll up or down. Definitely a bug."
+       *
+       * It is, and it is this line. The drift is eastward and it accumulates on
+       * the TARGET, without bound — sit in §02 for half a minute and `tLon` is
+       * 25° east of the venue the page is talking about. Then the next thing the
+       * reader scrolls past re-aims at an actual venue longitude, which throws all
+       * of that away in one go: the camera has to unwind the whole accumulated
+       * drift, WESTWARD, at up to MAX_TURN. So the amount of reverse spin was
+       * proportional to how long the reader had been reading — which is exactly
+       * why it looked random, and why it never showed up in a quick pass over the
+       * page. Past the hero none of the drift that caused it was ever visible: the
+       * disc is at 0.14 opacity behind #scrim, and setBusy() stops it painting at
+       * all while the reader moves. It was invisible going out and expensive
+       * coming back.
+       *
+       * So the drift is gated on the globe being the subject. At the hero it is
+       * exactly as it was, 0.9°/s; anywhere below it the camera simply stays where
+       * the last look-at put it, and every later aim is then the few degrees
+       * between one Swedish circuit and the next rather than a minute of unwinding.
+       * DRIFT_DIM is the same 0.5 lookAt() uses to decide "subject or backdrop", on
+       * purpose: one threshold, one meaning. */
+      if (now > state.holdUntil && state.dim >= DRIFT_DIM) {
         state.tLon += state.drift * dt;              // keep drifting once settled
       }
     } else {
@@ -946,6 +1044,13 @@ export function createGlobe(canvas, opts = {}) {
 
     paint();
     canvas.dataset.raster = String(surf.size);   // set by paint(), so read it after
+    /* ★ What the surface pass costs and what the ladder made of it — see
+       RASTER_LADDER. Published because "it backs off when it cannot hold the
+       budget" is a claim about a number no test can otherwise see, and because a
+       machine silently stuck on the bottom rung looks identical to one that never
+       needed to move. */
+    canvas.dataset.surfMs = cost.ms.toFixed(2);
+    canvas.dataset.rasterCap = String(rasterCeiling());
   }
 
   /* ------------------------------------------------------------- public */
@@ -964,12 +1069,18 @@ export function createGlobe(canvas, opts = {}) {
      * and plays it as a spin at the exact moment the globe becomes visible,
      * which is what he was seeing. Once the globe IS the subject (dim >= .5) a
      * look-at eases normally, so nothing teleports in front of the reader.
+     *
+     * ★ §02's per-entry aim passes it too now, and that is the other half of the
+     * reverse-spin fix — see the drift gate in frame(). Every one of those aims
+     * lands with the disc at 0.14 opacity behind the scrim, which is the case this
+     * option was written for; flying them was animating something nobody was
+     * looking at and then handing the reader whatever was left of it.
      */
     lookAt(lat, lon, { hold = 2600, settled = false } = {}) {
       state.tLat = Math.max(-70, Math.min(70, lat));
       state.tLon = lon;
       state.holdUntil = performance.now() + hold;
-      if (settled && state.dim < 0.5) {
+      if (settled && state.dim < DRIFT_DIM) {
         state.lat = state.tLat;
         state.lon = state.tLon;
       }

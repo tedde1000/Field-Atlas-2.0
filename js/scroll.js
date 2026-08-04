@@ -33,9 +33,15 @@ export function initReveal(root = document) {
   return { observe: (el) => io.observe(el) };
 }
 
-export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter, onGlobeDim, onBusy, stars }) {
+/* ★ HOW CLOSE A SECTION HAS TO BE FOR ITS CANVAS TO BE WORTH PAINTING, in
+   viewports either side of it. See `onNear` below. */
+const NEAR = 0.3;
+
+export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter, onGlobeDim, onBusy, stars,
+                             nearId = null, onNear = null }) {
   const sections = [...document.querySelectorAll('section[data-chapter]')];
-  const state = { chapter: null, motion: true };
+  const state = { chapter: null, motion: true, near: null };
+  const nearIx = nearId ? sections.findIndex(s => s.id === nearId) : -1;
   let ticking = false;
 
   /* ★ Is the reader moving right now? The canvases behind the page use this to
@@ -149,6 +155,34 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     // tell the globe how visible it actually is, so it can stop spending a
     // full-resolution repaint per frame on something at 14% behind the scrim
     onGlobeDim && onGlobeDim(go);
+
+    /* ★ IS §03's FIGURE NEAR ENOUGH TO BE WORTH PAINTING — AND WHY THIS IS NOT AN
+     * IntersectionObserver ANY MORE.
+     *
+     * It was one, on `.figure`, and it could get stuck. Deep-linking to #anatomy
+     * scrolls the page in a rAF loop for two seconds (see goHash() in js/main.js,
+     * which re-aims because the display faces reflow every entry), and the observer
+     * delivered exactly one record during that — taken at an instant when the
+     * figure was 2 960px above the viewport — and then never delivered again, at
+     * any later scroll position. The figure came to rest fully on screen, paused,
+     * with no way back: no repaints, no racing line, an empty box. Whether that is
+     * a headless quirk or not is beside the point, because the failure mode is
+     * silent and total, and the same code was one layout change away from it all
+     * along — the old figure simply happened to get its one record at a moment when
+     * the answer was yes.
+     *
+     * The scroll reader already knows where every section is and what the scroll
+     * position is, both from numbers it has cached — so this is two comparisons
+     * against values already in hand, it re-evaluates on every scroll rather than
+     * on a notification that may not come, and it reads no layout, which is the
+     * rule this whole function is built around. One mechanism, and it cannot get
+     * stuck, because there is no state to get stuck in. */
+    if (onNear && nearIx >= 0) {
+      const top = metrics.tops[nearIx];
+      const bot = nearIx + 1 < metrics.tops.length ? metrics.tops[nearIx + 1] : metrics.doc + vh;
+      const v = (y + vh * (1 + NEAR)) >= top && y <= bot + vh * NEAR;
+      if (v !== state.near) { state.near = v; onNear(v); }
+    }
 
     /* ---- and report it (resolved above, before the writes) ---- */
     if (cur && cur.id !== state.chapter) {

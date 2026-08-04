@@ -36,8 +36,8 @@
      phone that has never seen the site before, still look right. -->
 <link rel="stylesheet" href="assets/fonts.css?v=95d09e90">
 
-<link rel="stylesheet" href="assets/tokens.css?v=502e59e0">
-<link rel="stylesheet" href="assets/app.css?v=63e4c3d2">
+<link rel="stylesheet" href="assets/tokens.css?v=202054ef">
+<link rel="stylesheet" href="assets/app.css?v=a28ab668">
 </head>
 <body>
 
@@ -187,7 +187,28 @@
             <span class="mono l" id="fig-label">FIG. 3.1 — RACING LINE, GELLERÅSEN ARENA</span>
             <span class="mono r" id="fig-meta">PARTICLES 900 · INTEGRATING</span>
           </div>
-          <canvas id="flow"></canvas>
+          <!-- ★ The racing line stands in the scene now, on the same 3D stage the
+               panel's track layouts use — see js/layout3d.js. The plane is sized to
+               the circuit by renderFigure() in js/main.js, the canvas is the ground
+               it lies on, and the corner numbers ride posts above it. -->
+          <div class="p3d p3d--fig" id="fig-3d" data-layout3d data-wheel="modifier">
+            <div class="p3d-stage" tabindex="0" role="group"
+                 aria-label="Racing line in three dimensions. Drag to orbit, arrow keys to turn, 0 to reset.">
+              <div class="p3d-plane" id="fig-plane">
+                <canvas id="flow"></canvas>
+                <div class="p3d-marks" id="fig-marks"></div>
+              </div>
+              <!-- no .p3d-tag here: the panel's stage names its circuit in the
+                   corner because nothing else on the card does, and #fig-label
+                   above already reads "FIG. 3.1 — RACING LINE, GELLERÅSEN ARENA".
+                   On a phone the caption wraps to two lines and the tag landed
+                   underneath the second one. -->
+            </div>
+            <div class="p3d-bar">
+              <span class="p3d-hint mono">DRAG TO ORBIT · PINCH OR CTRL-SCROLL TO ZOOM</span>
+              <button class="p3d-reset mono" type="button">RESET VIEW</button>
+            </div>
+          </div>
         </div>
         <div class="figure-legend mono rise" style="--d:.1s" id="fig-legend"></div>
         <div class="circuit-pick rise" style="--d:.14s" id="circuit-pick"></div>
@@ -258,6 +279,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=8a8c7bf8"></script>
+<script type="module" src="js/main.js?v=b60cda95"></script>
 </body>
 </html>

@@ -30,7 +30,7 @@
  *   is worth the round trip, and offline still works because the fallback
  *   is a full precache rather than a partial one.
  * ===================================================================== */
-const CACHE_VERSION = 'fa2-v2';
+const CACHE_VERSION = 'fa2-v3';
 const SHELL = CACHE_VERSION + '-shell';
 
 /* There is no cross-origin branch here, and that is a property of the page

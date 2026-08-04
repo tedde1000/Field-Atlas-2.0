@@ -147,10 +147,20 @@ export function createCircuitFigure(canvas) {
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const rect = canvas.getBoundingClientRect();
     S.dpr = dpr;
-    S.w = Math.max(1, Math.round(rect.width));
-    S.h = Math.max(1, Math.round(rect.height));
+    /* ★ offsetWidth/offsetHeight, NOT getBoundingClientRect().
+     *
+     * This canvas is the ground of a 3D stage now (see js/layout3d.js), and a
+     * bounding rect is the box AFTER the transform: turned back 56° and rotated
+     * −18°, the rect reports about two thirds of the height and rather more than
+     * the width of the box the canvas actually occupies. Sizing a backing store to
+     * that shrinks the drawing every time the reader turns the plane, and re-fits
+     * and re-solves the racing line into a box that does not exist. The offset
+     * pair is the untransformed layout box, which is the only thing a backing
+     * store can correctly match. */
+    const rect = canvas.getBoundingClientRect();
+    S.w = Math.max(1, canvas.offsetWidth || Math.round(rect.width));
+    S.h = Math.max(1, canvas.offsetHeight || Math.round(rect.height));
     canvas.width = S.w * dpr; canvas.height = S.h * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fit();
@@ -160,22 +170,26 @@ export function createCircuitFigure(canvas) {
   /* fit the trace into the canvas with room for the callout labels, then solve
      the racing line — the corridor is specified in screen pixels, so it cannot
      be solved until we know how many trace units a pixel is worth */
+  /* ★ THE PADDING IS THE ROAD NOW, NOT THE LABELS — and that is most of the fix
+   * for "the circuit is really small for the area itself".
+   *
+   * The numerals used to be drawn into this canvas, sitting outside the lap on the
+   * outside of each turn, so the fit had to hold 62–118px clear on every single
+   * side to keep them off the frame. On a phone that is 236px of a 370px canvas
+   * reserved for text — the lap got what was left, which is why Gelleråsen came out
+   * a third of the width it had room for with a field of empty graph paper under
+   * it. The numbers stand OVER the drawing on posts now (see marks() and
+   * js/layout3d.js), so what is left to clear is the width of the road itself and
+   * a little air, and the drawing gets the rest. */
+  const ROOM = HALF_PX + 8;
+
   function fit() {
-    if (!S.pts) return;
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const p of S.pts) {
-      if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
-      if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
-    }
-    /* the padding has to clear the corridor AND the numerals sitting outside it,
-       or a corner on the bounding box gets its number clipped by the frame */
-    const padX = S.w < 620 ? 40 : 96, padY = S.w < 620 ? 46 : 62;
-    const room = HALF_PX + 22;
-    const s = Math.min((S.w - (padX + room) * 2) / (x1 - x0 || 1),
-                       (S.h - (padY + room) * 2) / (y1 - y0 || 1));
+    if (!S.pts || !S.bb) return;
+    const { x0, y0, w: bw, h: bh } = S.bb;
+    const s = Math.min((S.w - ROOM * 2) / (bw || 1), (S.h - ROOM * 2) / (bh || 1));
     S.scale = s;
-    S.ox = (S.w - (x1 - x0) * s) / 2 - x0 * s;
-    S.oy = (S.h - (y1 - y0) * s) / 2 - y0 * s;
+    S.ox = (S.w - bw * s) / 2 - x0 * s;
+    S.oy = (S.h - bh * s) / 2 - y0 * s;
     solve();
   }
   const X = (p) => p[0] * S.scale + S.ox;
@@ -233,13 +247,40 @@ export function createCircuitFigure(canvas) {
       for (const x of S.v) { if (x < lo) lo = x; if (x > hi) hi = x; }
       S.vLo = lo; S.vHi = Math.max(hi, lo + 1e-6);
     }
+    findApexes();
     S.stillKey = null;
+  }
+
+  /* ★ WHERE EACH CORNER ACTUALLY APEXES — the node at which the solved line lies
+   * nearest the inside kerb. It used to be worked out inside drawMarks(), i.e.
+   * inside a paint, which was fine while the only consumer was a tick drawn on the
+   * same canvas in the same pass. The corner numbers are DOM objects standing over
+   * the drawing now (see marks()), and asking a paint to have happened before the
+   * markup can be built is a race with a canvas that does not paint at all while it
+   * is off-screen — §03 is gated on an IntersectionObserver. It belongs to the
+   * SOLVE, which is where the line it is a property of comes from. */
+  function findApexes() {
+    if (!S.line || !S.d || !S.corners.length) return;
+    const n = S.pts.length;
+    for (const c of S.corners) {
+      const inward = Math.sign(c.turn) || 1;
+      let apex = c.i, best = -Infinity;
+      for (let j = 0; j < c.len; j++) {
+        const idx = (c.from + j) % n;
+        const toward = S.d[idx] * inward;
+        if (toward > best) { best = toward; apex = idx; }
+      }
+      c.apex = apex;
+      c.inward = inward;
+    }
   }
 
   /* ------------------------------------------------------------- loading */
   function load(track) {
     const raw = track.path;
-    if (!raw || raw.length < 8) { S.pts = S.line = null; return; }
+    // ★ the bounding box goes with them: aspect() feeds the stage's own shape, so
+    // a stale one would size the plane to the circuit before this one
+    if (!raw || raw.length < 8) { S.pts = S.line = S.bb = null; return; }
     S.id = track.id || null;
     S.stillKey = null;              // different track, different still layers
     /* ★ The figure must show the SAME circuit the SVG layouts do.
@@ -260,6 +301,21 @@ export function createCircuitFigure(canvas) {
        and to an arc-length integral. */
     S.pts = resampleUniform(shaped, NODES);
     S.k = curvature(S.pts);
+
+    /* ★ The lap's own bounding box, measured here rather than inside fit().
+     * fit() runs on every resize; this does not change unless the circuit does —
+     * and, much more to the point, `aspect()` has to be answerable BEFORE the
+     * canvas has a size at all. The stage sizes its plane to the drawing's shape
+     * and the canvas then measures itself against that plane, so the drawing's
+     * proportions have to be known one step earlier than they used to be. */
+    {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const p of S.pts) {
+        if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0];
+        if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1];
+      }
+      S.bb = { x0, x1, y0, y1, w: (x1 - x0) || 1, h: (y1 - y0) || 1 };
+    }
 
     /* ★ THE TIGHTEST CORNER ON THE DRAWING, WHICH SETS HOW WIDE THE ROAD MAY BE.
      * curvature() is heading change over ±3 nodes, so per unit of arc length it is
@@ -349,7 +405,13 @@ export function createCircuitFigure(canvas) {
     S.reveal = 0;
     S.t0 = S.motion ? performance.now() : -1e9;
     S.tPrev = performance.now();
-    fit();
+
+    /* ★ NO fit() HERE, AND THAT IS DELIBERATE. fit() ends in solve(), which is a
+     * fifth of a second of lap-time search — and the caller's very next move is to
+     * resize the plane to this circuit's aspect ratio and call resize(), which fits
+     * and solves again into a canvas of a different size. Solving twice for one
+     * click was a visible stall on a phone. load() now leaves the figure geometric
+     * and unsolved; renderFigure() in js/main.js owns the order. */
   }
 
   /* ============================================== the still layers
@@ -551,7 +613,6 @@ export function createCircuitFigure(canvas) {
   /** start/finish bar, apex ticks and the numbered corners — baked into `over` */
   function drawMarks(g, shown, n, isDay, accent) {
     const ink3 = tok('--ink-3', '#6c675f');
-    const ink = tok('--ink', '#ece5d9');
 
     // -- start / finish, struck across the whole road rather than a stub
     if (shown >= n * 0.98) {
@@ -576,14 +637,7 @@ export function createCircuitFigure(canvas) {
     g.lineWidth = 1.6;
     g.beginPath();
     for (const c of S.corners) {
-      const inward = Math.sign(c.turn) || 1;
-      let apex = c.i, bestD = -Infinity;
-      for (let j = 0; j < c.len; j++) {
-        const idx = (c.from + j) % n;
-        const towardKerb = S.d[idx] * inward;
-        if (towardKerb > bestD) { bestD = towardKerb; apex = idx; }
-      }
-      c.apex = apex;
+      const apex = c.apex ?? c.i, inward = c.inward ?? 1;
       const ax = X(S.line[apex]), ay = Y(S.line[apex]);
       const kx = S.nx[apex] * inward, ky = S.ny[apex] * inward;
       g.moveTo(ax - kx * 4, ay - ky * 4);
@@ -591,24 +645,13 @@ export function createCircuitFigure(canvas) {
     }
     g.stroke();
 
-    /* -- the numbers. Every corner the spec table claims, sitting just OUTSIDE
-          the road on the outside of the turn, where the line is wide and there is
-          therefore nothing to cover. A named corner gets its name beside it. */
-    for (const c of S.corners) {
-      const out = -(Math.sign(c.turn) || 1);
-      const px = S.halfPx + 11;
-      const x = offX(c.i, out * px), y = offY(c.i, out * px);
-
-      g.globalAlpha = alpha;
-      label(g, x, y, String(c.no), accent, 'centre', 10.5);
-
-      if (c.label) {
-        // push the name one step further out, along the same normal
-        const nx2 = offX(c.i, out * (px + 13)), ny2 = offY(c.i, out * (px + 13));
-        g.globalAlpha = alpha * 0.72;
-        label(g, nx2, ny2, c.label.toUpperCase(), ink, 'centre', 8.5);
-      }
-    }
+    /* ★ THE NUMERALS ARE NOT DRAWN HERE ANY MORE, for the reason js/layout3d.js
+     * gives at length: a glyph lying flat on a plane turned back 56° is squashed to
+     * two fifths of its height and past about 70° it is a line. They come out of
+     * the canvas and become objects standing over their own apexes on posts — see
+     * marks() below, and .p3d-mark in assets/app.css. What is left in the drawing
+     * is what genuinely belongs ON the tarmac: the apex ticks above and the
+     * start/finish bar, exactly the split the panel's layouts already make. */
     g.restore();
   }
 
@@ -667,6 +710,38 @@ export function createCircuitFigure(canvas) {
   const api = {
     load(track) { load(track); },
     resize() { resize(); },
+    /**
+     * ★ THE SHAPE OF THE DRAWING, ASKED FOR BEFORE THERE IS ANYWHERE TO DRAW IT.
+     *
+     * The figure is the ground of a 3D stage now, and js/layout3d.js's plane only
+     * fits its drawing edge to edge when the two aspect ratios agree — that is the
+     * same constraint stage3d() states for the panel's SVG, and it is what lets a
+     * corner be positioned as a percentage of the plane rather than of a letterbox.
+     * So the caller sizes the plane to this, and the canvas measures itself against
+     * the plane afterwards. Available as soon as load() has run.
+     */
+    aspect: () => (S.bb ? S.bb.w / S.bb.h : 1),
+
+    /**
+     * Every numbered corner as a position on the canvas, in fractions of its box —
+     * which, the plane being the canvas, are fractions of the plane. The point is
+     * the APEX on the solved racing line rather than the corner's centre node: it
+     * is the place the figure is actually about, and standing the number over it
+     * says "this is where the line touches" without a word of caption.
+     */
+    marks: () => (!S.line || !S.w || !S.h) ? [] : S.corners.map(c => {
+      const p = S.line[c.apex ?? c.i];
+      return {
+        no: c.no,
+        label: c.label || null,
+        x: (p[0] * S.scale + S.ox) / S.w,
+        y: (p[1] * S.scale + S.oy) / S.h,
+      };
+    }),
+
+    /** the drawing's own size on the canvas, in px — what --lift is scaled off */
+    span: () => Math.max(S.bb ? S.bb.w * S.scale : 0, S.bb ? S.bb.h * S.scale : 0),
+
     /** the corners as the legend wants them: number, name, angle, shape */
     corners: () => S.corners.map(c => ({
       no: c.no,

@@ -15,7 +15,7 @@ import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
          curvature, numberedCorners, cornerRuns } from './loop.js';
 import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
-import { stage3d, mount as mount3d } from './layout3d.js';
+import { stage3d, tierMarks, poseFit, mount as mount3d } from './layout3d.js';
 import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS, kit,
          adopt, addItem, renameItem, setCategory, setRental, setQty, deleteItem } from './gear.js';
 
@@ -1123,6 +1123,96 @@ function circuitPanel(id) {
 }
 
 /* ============================================================ §03 the figure */
+
+/* ★ THE FIGURE IS SIZED TO THE CIRCUIT, NOT THE CIRCUIT TO THE FIGURE.
+ *
+ * Theodor: "the circuit is really small for the area itself. What I want is the
+ * 3D track map, but with the racing line in that area — so you can interact with
+ * it, and you also see the racing line on the track itself."
+ *
+ * Two separate things were making it small, and only one of them was the box. The
+ * other was the fit: the corner numerals used to be drawn into the canvas outside
+ * the lap, so js/circuit.js reserved up to 118px on every side for them and the
+ * drawing took whatever was left — see ROOM there. With the numbers standing over
+ * the drawing on posts, that reserve is gone.
+ *
+ * What is left is genuinely a box problem, and it is the one poseFit() solves. A
+ * plane turned back 56° foreshortens to about 56% of its height, so a 3:1
+ * Gelleråsen laid on it projects to roughly a quarter of a fixed 560px stage — the
+ * empty graph paper under the drawing was the other three quarters. Rather than
+ * magnify the drawing past the width it has, the stage is sized to what the pose
+ * actually occupies: the plane takes the width, and the height follows from the
+ * projection plus the room the tallest post needs. Nothing is reserved that
+ * nothing can use.
+ *
+ * Everything here is re-run on resize, because every term in it is a length.
+ */
+function layoutFigure(fig) {
+  const host = $('#fig-3d'), plane = $('#fig-plane');
+  const stage = host.querySelector('.p3d-stage');
+  if (!host || !plane || !stage) return;
+
+  /* the plane's share of the stage — the CSS default is `min(92%, 940px)` and this
+     has to agree with it, so both live in one expression and app.css defers */
+  const availW = Math.min(stage.clientWidth * 0.92, 940);
+  /* the tallest the figure may be. Portrait circuits are limited by this rather
+     than by the width — poseFit() inverts for it, and Uddevalla is why: at 3:5 it
+     wants a 1 180px plane, and clipped its own turn 6 off the top of the stage
+     before the height was fed back in. `1.18` is the breathing room the stage adds
+     below, so what poseFit() is given is the room the POSE actually has. */
+  const roof = Math.min(window.innerHeight * 0.68, 720);
+  const pose = poseFit(fig.aspect(), Math.max(80, availW), roof / 1.12);
+
+  /* ★ THE PLANE'S WIDTH IS WRITTEN IN PIXELS, not left at the CSS percentage.
+     A tall circuit's plane has to be NARROWER than the stage, because the Z
+     rotation swings its height out sideways — poseFit() is what knows by how much,
+     and a percentage width plus an aspect-ratio would put the answer back in the
+     browser's hands and let a portrait lap run off both edges. */
+  host.style.setProperty('--fig-pw', pose.w.toFixed(1) + 'px');
+  plane.style.aspectRatio = `${pose.w.toFixed(2)} / ${pose.h.toFixed(2)}`;
+  /* 1.12: the plane is nudged down 8% of its own height before the rotation (see
+     .p3d-plane) and the reader can zoom in on it, so the box carries a little more
+     than the still pose needs. Floored so a very wide lap still reads as a figure
+     rather than a strip and still has room to be dragged, and capped so a portrait
+     one cannot eat the viewport. */
+  host.style.setProperty('--fig-h',
+    Math.round(Math.max(280, Math.min(pose.screenH * 1.12, roof))) + 'px');
+  // in real pixels here, where stage3d() works in artboard units — same 0.095
+  host.style.setProperty('--lift', (Math.max(pose.w, pose.h) * 0.095).toFixed(2) + 'px');
+
+  /* reading offsetWidth inside resize() flushes the layout above, so the canvas
+     measures the plane it has just been given rather than the previous one */
+  fig.resize();
+  renderFigMarks(fig, pose);
+}
+
+/** the corner numbers, as objects standing over their own apexes on the plane */
+function renderFigMarks(fig, pose) {
+  const box = $('#fig-marks');
+  if (!box) return;
+  const marks = fig.marks();
+  /* tiered in PLANE PIXELS, so "these two corners are crowded" is the same
+     judgement here as in the panel — see tierMarks() in js/layout3d.js */
+  const ks = tierMarks(marks.map(m => ({ x: m.x * pose.w, y: m.y * pose.h })),
+                       Math.max(pose.w, pose.h));
+  const pct = (v) => (v * 100).toFixed(3) + '%';
+  /* ★ THE NUMBER ONLY — no corner NAME on the post, where the panel's layouts
+     carry one. Two reasons and the second is the real one. A name box is five to
+     eight times the width of a numeral, and §03's plane on a phone is ~305px
+     across: TRÖSKURVAN, EJES KURVA and DEPÅKURVAN alone covered half the circuit
+     and each other, which is worse than the crowding the tiers exist to fix. And
+     it is redundant here in a way it is not in the panel — #fig-legend, directly
+     under this figure, already prints every name against its number and its
+     angle. The panel's layout has no legend beneath it, so there the name has
+     nowhere else to be. */
+  box.innerHTML = marks.map((m, i) => `
+    <div class="p3d-mark" style="left:${pct(m.x)};top:${pct(m.y)};--k:${ks[i]}">
+      <i class="p3d-post" aria-hidden="true"></i>
+      <b class="p3d-no"><span>${m.no}</span></b>
+    </div>`).join('');
+  box.dataset.marks = String(marks.length);
+}
+
 function renderFigure(fig) {
   const pick = $('#circuit-pick');
   /* `kind`, not `path`: an artwork circuit has no point list of its own until
@@ -1140,6 +1230,11 @@ function renderFigure(fig) {
     // hand the canvas the flattened geometry, so §03 draws the same circuit the
     // SVG layouts do rather than re-deriving one from a coarser source
     fig.load({ ...o, path: circuitPoints(o), dense: o.kind !== 'sampled' });
+    /* ★ load() no longer fits or solves — this does, once, after the stage has
+       been resized to the new circuit's shape. Doing it the other way round solved
+       the racing line into the OLD circuit's box and then again into the new one:
+       two lap-time searches, a fifth of a second each, for one tap. */
+    layoutFigure(fig);
     $('#fig-label').textContent =
       `FIG. 3.1 — RACING LINE, ${o.name.toUpperCase()}`;
     const t = o.track || {};
@@ -1239,7 +1334,28 @@ function boot() {
   ], HOME);
 
   renderFigure(fig);
+  /* §03's stage is in index.html rather than in a panel string, so it is wired
+     once, here — the panel's own layouts are wired per render in onAfterRender */
+  mount3d(document);
   initReveal();
+
+  /* --- paint gating -------------------------------------------------------
+   * Two independent reasons a canvas should stop: the tab is hidden, and the
+   * §03 figure is nowhere near the viewport. They have to be combined in one
+   * place, or returning to the tab resumes a figure that is still off-screen.
+   *
+   * ★ Declared BEFORE initScroll rather than after it. The scroll reader answers
+   * the second of those questions now (see `onNear` in js/scroll.js) and it
+   * answers it once during its own construction, so a `const` below this point
+   * would be read inside its own temporal dead zone.
+   * ---------------------------------------------------------------------- */
+  const gate = { hidden: false, figOff: true };
+  const applyGates = () => {
+    const awake = !gate.hidden;
+    awake ? stars.resume() : stars.pause();
+    awake ? globe.resume() : globe.pause();
+    (awake && !gate.figOff) ? fig.resume() : fig.pause();
+  };
 
   const scroll = initScroll({
     hero: $('#hero'),
@@ -1247,6 +1363,11 @@ function boot() {
     progress: $('#progress'),
     chapterLabel: $('#chapter-label'),
     stars,
+    /* §03's figure paints only while the reader is within a third of a viewport
+       of the chapter it lives in — see the note over `onNear` in js/scroll.js for
+       why this is not an IntersectionObserver any more. */
+    nearId: 'anatomy',
+    onNear: (v) => { gate.figOff = !v; applyGates(); },
     onChapter(id) {
       /* `settled: true` — these two are re-aims the reader did not ask for, they
          just arrived at a chapter. While the globe is dim they are placed, not
@@ -1267,28 +1388,6 @@ function boot() {
     onBusy: (v) => { globe.setBusy(v); stars.setBusy(v); },
   });
 
-  /* --- paint gating -------------------------------------------------------
-   * Two independent reasons a canvas should stop: the tab is hidden, and the
-   * §03 figure is nowhere near the viewport. They have to be combined in one
-   * place, or returning to the tab resumes a figure that is still off-screen.
-   * ---------------------------------------------------------------------- */
-  const gate = { hidden: false, figOff: true };
-  const applyGates = () => {
-    const awake = !gate.hidden;
-    awake ? stars.resume() : stars.pause();
-    awake ? globe.resume() : globe.pause();
-    (awake && !gate.figOff) ? fig.resume() : fig.pause();
-  };
-
-  if ('IntersectionObserver' in window) {
-    const figIo = new IntersectionObserver(([x]) => {
-      gate.figOff = !x.isIntersecting;
-      applyGates();
-    }, { rootMargin: '250px 0px 250px 0px' });
-    figIo.observe($('.figure'));
-  } else {
-    gate.figOff = false;
-  }
   applyGates();
 
   /* --- the globe follows whichever date you are reading --- */
@@ -1302,7 +1401,15 @@ function boot() {
       const key = vis.target.dataset.key;
       const e = EVENTS.find(x => x.key === key);
       if (!e) return;
-      globe.lookAt(e.venue.lat - 22, e.venue.lon, { hold: 5200 });
+      /* `settled: true` for the same reason the two chapter aims carry it, and it
+         is the visible half of the reverse-spin fix — see the drift gate in
+         js/globe.js. Every aim from this observer happens while the disc is at
+         0.14 opacity behind #scrim and, while the reader is actually moving, while
+         it is not painting at all. There is nothing to animate for; flying it only
+         guaranteed that some of the swing was still in flight when the globe came
+         back into view. Placed, the camera is already pointing at the venue by the
+         time anybody looks. */
+      globe.lookAt(e.venue.lat - 22, e.venue.lon, { hold: 5200, settled: true });
       globe.focus(e.venue.id);
       chips.forEach(c => c.setAttribute('aria-current', String(c.dataset.key === key)));
       const n = EVENTS.indexOf(e) + 1;
@@ -1584,7 +1691,9 @@ function boot() {
   let rt = 0;
   window.addEventListener('resize', () => {
     clearTimeout(rt);
-    rt = setTimeout(() => { stars.resize(); globe.resize(); fig.resize(); scroll.refresh(); }, 120);
+    // layoutFigure(), not fig.resize(): every term in the stage's height is a
+    // length, so a width change re-derives the pose before the canvas is re-fitted
+    rt = setTimeout(() => { stars.resize(); globe.resize(); layoutFigure(fig); scroll.refresh(); }, 120);
   });
   document.addEventListener('visibilitychange', () => {
     gate.hidden = document.hidden;
@@ -1627,7 +1736,7 @@ function boot() {
   const aim = () => goHash(performance.now() + 2000);
 
   requestAnimationFrame(() => {
-    fig.resize(); globe.resize();
+    layoutFigure(fig); globe.resize();
     document.body.classList.add('lit');
     panel.sync();          // honour #date/… or #circuit/… already in the URL
     aim();

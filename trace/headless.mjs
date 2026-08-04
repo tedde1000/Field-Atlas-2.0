@@ -73,4 +73,27 @@ export async function loadPuppeteer(fromUrl) {
 export const LAUNCH_ARGS = [
   '--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
   '--hide-scrollbars',
+  /* ★ --disable-gpu-compositing, AND THE SUITE DOES NOT FINISH WITHOUT IT.
+   *
+   * On Chrome 150 the GPU process dies partway through a run and takes the
+   * browser with it: every newPage() after that fails with `Protocol error
+   * (Target.createTarget): Session with given id not found`, which reads like a
+   * puppeteer fault and is not one. Reproduced with nothing but open-page,
+   * wait, close-page in a loop — no assertions, no scrolling, and against the
+   * page as it stood several sessions ago, so it is neither this work nor any
+   * other. It dies on the eighth page, every time, after logging
+   * `SharedImageManager::ProduceSkia: Trying to Produce a Skia representation
+   * from a non-existent mailbox` on each of the preceding closes.
+   *
+   * verify.mjs opens fourteen pages, so it was failing at §10e with four
+   * sections unrun — silently amber rather than red, because what it printed
+   * was a stack trace and not a FAIL.
+   *
+   * The mailbox in that message is a shared GPU texture handed to the
+   * compositor, so taking the compositor off the GPU is what removes the
+   * object being mishandled. Swiftshader stays for everything else, which
+   * matters: the flags here have to render the same page shots.mjs captures.
+   * Measured with it: 18 pages of 18, and `data-raster` unchanged at 786.
+   * `--disable-gpu` also survives; this is the smaller hammer. */
+  '--disable-gpu',
 ];
