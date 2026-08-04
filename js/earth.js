@@ -290,6 +290,91 @@ function blurField(src, radius, passes = 3) {
   return a;
 }
 
+/* ============================================ THE POLAR PREFILTER
+ * ★ THE PLATE CARRIES DETAIL NEAR THE POLES THAT NO ORTHOGRAPHIC SPHERE CAN EVER
+ * SHOW, AND THAT SURPLUS IS WHAT WAS CRAWLING.
+ *
+ * Theodor: "you can see a bit of artifacting, a bit of stuff moving on islands
+ * and on the land."
+ *
+ * This is the other half of it, and it is a sampling fault rather than a drawing
+ * one. An equirectangular plate spends the same 2 048 texels on every parallel,
+ * but a parallel at latitude φ is only cos(φ) as long as the equator — so a texel
+ * at 60°N covers HALF the ground a texel at 0° does, at 70°N a third, at 80°N a
+ * sixth. The sphere, meanwhile, is drawn at one uniform scale. js/globe.js reads
+ * about 0.64 texels per raster pixel at the equator, which is a comfortable
+ * oversample; at 60°N that is 1.3 texels per pixel and at 70°N 1.9 — past Nyquist,
+ * where bilinear filtering does not help and cannot. The plate has real detail the
+ * raster has to skip over, so which detail it lands on changes as the planet
+ * turns: Svalbard, Novaya Zemlya, the Canadian archipelago and the whole Siberian
+ * coast shimmered, which is precisely the "islands" in the report.
+ *
+ * The fix belongs HERE, not in the render loop, because it costs nothing at 30 Hz
+ * and it throws away nothing anyone could have seen. Each row is low-passed along
+ * its own length until it carries the same detail PER KILOMETRE OF GROUND as the
+ * equator does — sec(φ) texels wide. Below about 45° that is under a texel and the
+ * row is left alone; at 80° it is a six-texel average; at the pole the row
+ * collapses toward one colour, which is the correct answer, because the pole IS
+ * one point however many texels the projection spends on it.
+ *
+ * Two passes rather than one: a single box leaks a fifth of the amplitude straight
+ * back through its first sidelobe, and leaked amplitude at exactly the frequency
+ * being removed is the crawl. Convolving two boxes gives a triangle, whose
+ * stopband is that squared. Half-widths add in variance, so each pass runs at
+ * √(sec²−1)/(2√2) — the √(sec²−1) being what is needed ON TOP of the texel's own
+ * one-wide footprint, rather than instead of it.
+ *
+ * All four channels together, city lights included: the lights alias for the same
+ * reason the coastlines do, and Tromsø has as much right not to flicker as Oslo.
+ * ========================================================================= */
+
+/** One box pass along one CHANNEL of one row, wrapping at the date line.
+ *
+ * The half-width is FRACTIONAL and that matters more than it looks: rounding it to
+ * whole texels quantises the filter to nothing at all below 60° and then to a
+ * five-texel smear at 70°, which shows up as a hard latitude band right across
+ * Siberia. The integer core runs on a sliding sum; the fractional remainder is one
+ * weighted sample at each end.
+ *
+ * ★ De-interleaved, and the index wraps with a comparison rather than a modulo.
+ * This is 14 million inner iterations over the finished plate and the obvious
+ * version — a closure over the RGBA buffer doing `((x % W) + W) % W` — measured
+ * several times this one. `r` is capped at W/8 below, so an index can never be
+ * more than one map-width out and a single `if` is a complete wrap. */
+function boxRow(a, b, W, r, f) {
+  const inv = 1 / (2 * r + 1 + 2 * f);
+  let sum = 0;
+  for (let k = -r; k <= r; k++) sum += a[k < 0 ? k + W : k];
+  for (let x = 0; x < W; x++) {
+    let lo = x - r - 1; if (lo < 0) lo += W;
+    let hi = x + r + 1; if (hi >= W) hi -= W;
+    let go = x - r; if (go < 0) go += W;
+    b[x] = (sum + (a[lo] + a[hi]) * f) * inv;
+    sum += a[hi] - a[go];
+  }
+}
+
+function polarPrefilter(out) {
+  const W = PLATE_W, H = PLATE_H;
+  const a = new Float32Array(W), b = new Float32Array(W);
+  for (let y = 0; y < H; y++) {
+    const lat = 90 - (y + 0.5) / H * 180;
+    const sec = 1 / Math.max(1e-6, Math.abs(Math.cos(lat * RAD)));
+    /* Capped at an eighth of the map. Past ~89.6° the honest half-width runs to
+       hundreds of texels for a row that is already one colour wide on any sphere,
+       and an uncapped sliding window there costs more than the rest of the bake. */
+    const h = Math.min(W / 8, Math.sqrt(Math.max(0, sec * sec - 1)) / (2 * Math.SQRT2));
+    if (h < 0.08) continue;            // under a tenth of a texel — nothing to gain
+    const r = Math.floor(h), f = h - r, row = y * W * 4;
+    for (let c = 0; c < 4; c++) {
+      for (let x = 0; x < W; x++) a[x] = out[row + (x << 2) + c];
+      boxRow(a, b, W, r, f);
+      boxRow(b, a, W, r, f);
+      for (let x = 0; x < W; x++) out[row + (x << 2) + c] = a[x];
+    }
+  }
+}
+
 /* ================================================== THE BAKE
  * One pass over 524 288 texels, once, at boot. Everything expensive about the
  * globe's look happens here rather than in js/globe.js's per-frame loop.
@@ -322,11 +407,34 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
    * rather than on the finished colour on purpose: it sharpens the SHAPE, so the
    * hillshade and the hypsometric tint both come out crisp and consistent, where
    * sharpening the output would just crawl along the coastlines. Radius and amount
-   * are conservative — this is a relief map, not a phone camera. */
+   * are conservative — this is a relief map, not a phone camera.
+   *
+   * ★ AND IT HAS A THRESHOLD NOW, WHICH IS WHAT STOPS THE ICE FIELDS BOILING.
+   *
+   * Theodor: "you can see a bit of artifacting, a bit of stuff moving on islands
+   * and on the land."
+   *
+   * An unsharp mask cannot tell a ridge from a compression artefact — it amplifies
+   * whatever the blur removed, and what the blur removes from a JPEG is both the
+   * ridge shoulders this is for AND the ±1-level ringing along every 8x8 block
+   * boundary. At 0.85 that ringing came back at nearly twice its amplitude, and
+   * the hillshade below is a DERIVATIVE, so a one-level step across one texel
+   * turns into a visible facet. Over Tibet and the ice sheets — where `ice` and
+   * the top of the hypsometric ramp are already near-white and any shading reads
+   * loudly — that was a field of texel-scale speckle, and a planet turning under
+   * a fixed raster makes speckle crawl.
+   *
+   * So the detail is gated on its own magnitude, with a soft knee so there is no
+   * threshold to see. Below 0.005 of the elevation range — a level and a half out
+   * of 255, which is noise and nothing else — none of it comes back; above 0.018
+   * all of it does, which is every real ridge on Earth. The mountains are exactly
+   * as sharp as they were and the flats stopped fizzing. */
   {
     const soft = blurField(elev, Math.round(1.5 * SCALE), 2);
     for (let i = 0; i < N; i++) {
-      elev[i] = clamp01(elev[i] + (elev[i] - soft[i]) * 0.85);
+      const detail = elev[i] - soft[i];
+      const keep = smoothstep(0.005, 0.018, Math.abs(detail));
+      elev[i] = clamp01(elev[i] + detail * 0.85 * keep);
     }
   }
 
@@ -537,6 +645,13 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
       out[o + 3] = lamps ? lamps[i] : 0;
     }
   }
+
+  /* ★ LAST, AND IT HAS TO BE LAST. See polarPrefilter() above. It band-limits the
+     FINISHED plate — hillshade, tint, coastline edge and lights together — because
+     every one of those is a source of the high-latitude detail the sphere cannot
+     resolve. Run it before the hillshade and the derivative would put the detail
+     straight back in. */
+  polarPrefilter(out);
   return out;
 }
 

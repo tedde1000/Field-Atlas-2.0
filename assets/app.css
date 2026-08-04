@@ -123,10 +123,66 @@ a { color: inherit; }
 .brand svg { width: 19px; height: 19px; flex: none; color: var(--accent); }
 .brand span { font-family: var(--font-mono); font-size: 11.5px; font-weight: 700; letter-spacing: .3em; white-space: nowrap; }
 
-.chapter { display: flex; align-items: center; gap: 14px; color: var(--ink-2); white-space: nowrap; }
+.chapter { position: relative; display: flex; align-items: center; gap: 14px; color: var(--ink-2); white-space: nowrap; }
 .chapter i { display: block; width: 26px; height: 1px; background: var(--hairline); font-style: normal; }
 .chapter b { font-weight: 500; color: var(--accent); }
 #chapter-label { transition: opacity .3s var(--ease); }
+/* The title is its own span so the ≤460px block can drop it and leave the number.
+   That span replaced a literal space in `<b>00</b> / OVERTURE`, so the gap has to
+   come back as a margin — without it the readout set as `00/ OVERTURE`. */
+#chapter-label .t { margin-left: .5em; }
+
+/* ★ THE READOUT BECAME A CONTROL — see the note beside it in index.html. It has
+   to keep looking like the label it was, because it is still doing that job: the
+   only additions are a chevron and something to hover. */
+.chapter-jump {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 0; padding: 5px 2px; border: 0; background: none;
+  font: inherit; letter-spacing: inherit; color: inherit;
+  cursor: pointer; transition: color .25s;
+}
+.chapter-jump:hover, .chapter-jump[aria-expanded='true'] { color: var(--ink); }
+.chapter-jump svg {
+  width: 10px; height: 10px; flex: none; opacity: .6;
+  transition: transform .25s var(--ease), opacity .25s;
+}
+.chapter-jump[aria-expanded='true'] svg { transform: rotate(180deg); opacity: 1; }
+
+.chapter-menu {
+  position: absolute; top: calc(100% + 9px); left: 50%;
+  /* 288px is measured, not chosen: §03 ANATOMY OF A CIRCUIT is the longest title
+     in the document and at 244px it ellipsised to "ANATOMY OF A CIRCU…". A menu
+     that truncates the one entry whose name is doing the most work is worse than
+     a menu 44px wider. `.t` keeps its ellipsis for whatever §06 turns out to be. */
+  min-width: 288px; padding: 5px; z-index: 5;
+  background: var(--chrome);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .42);
+  transform: translateX(-50%) translateY(-6px); opacity: 0;
+  transition: opacity .18s var(--ease), transform .18s var(--ease);
+}
+.chapter-menu[hidden] { display: none; }
+.chapter-menu.is-open { transform: translateX(-50%) translateY(0); opacity: 1; }
+.chapter-menu button {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: baseline;
+  gap: 12px; width: 100%; margin: 0; padding: 9px 11px;
+  border: 0; background: none; cursor: pointer; text-align: left;
+  font: inherit; letter-spacing: inherit; color: var(--ink-2);
+  transition: background .18s, color .18s;
+}
+.chapter-menu button:hover, .chapter-menu button:focus-visible { background: var(--surface-2); color: var(--ink); }
+.chapter-menu button .n { color: var(--accent); font-weight: 500; }
+.chapter-menu button .t { overflow: hidden; text-overflow: ellipsis; }
+/* the dot marks where the reader already is — the same amber the readout uses */
+.chapter-menu button .at {
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 7px var(--accent-soft); opacity: 0; align-self: center;
+}
+.chapter-menu button[aria-current='true'] { color: var(--ink); }
+.chapter-menu button[aria-current='true'] .at { opacity: 1; }
+body.no-motion .chapter-menu { transition: none; }
 
 .pills { display: flex; gap: 8px; justify-content: flex-end; }
 .pill {
@@ -452,6 +508,17 @@ section { position: relative; }
 .is-in .bar .fill { transform: scaleX(1); }
 .bar .v { font-family: var(--font-mono); font-size: 11.5px; font-weight: 700; text-align: right;
           word-spacing: .13em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* ★ `c/km` became `corners/km` — see bars() in js/main.js — and the value column
+   is `auto`, so the ~60px it gained comes straight out of the track beside it.
+   At 92px of fixed label that left the bar itself about 80px on a 360px phone,
+   which is a rule rather than a measure. The label column is the one thing here
+   that was never measuring anything, so it is what gives: 92px is generous for
+   DURATION and STRAIGHT even at the tighter tracking below. */
+@media (max-width: 700px) {
+  .bar { grid-template-columns: 70px 1fr auto; gap: 10px; }
+  .bar .k { font-size: 9px; letter-spacing: .08em; }
+  .bar .v u { letter-spacing: .04em; }
+}
 
 /* the little traced-circuit thumbnail beside the specs */
 .thumb { margin-bottom: 22px; }
@@ -1281,20 +1348,33 @@ body.no-motion .entry-open:hover svg { transform: none; }
   .cat { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .foot-grid .sig { text-align: left; }
 }
-/* ★ THE CHAPTER READOUT GOES, THE CONTROLS STAY.
+/* ★ THE CHAPTER READOUT STAYS NOW — IT IS THE NAVIGATION.
  *
- * This used to be `.pill:not(#pill-theme) { display: none }` — which hid MOTION
- * entirely on a phone. That was survivable while motion booted OFF and the pill
- * was a way to ask for more; it is not survivable now that motion boots ON,
- * because the off switch would not exist on the one device most likely to want
- * it. And KIT is now the page's only real piece of navigation.
+ * This block used to be `.pill:not(#pill-theme) { display: none }`, which hid
+ * MOTION entirely on a phone. That was survivable while motion booted OFF and the
+ * pill was a way to ask for more; it is not survivable now that motion boots ON,
+ * because the off switch would not exist on the one device most likely to want it.
+ * So what left instead was `.chapter`, on the reasoning that it was a read-only
+ * label reporting something the reader could already see.
  *
- * So the thing that leaves at this width is `.chapter`, which is a read-only
- * label — it reports where you are, and the reader can already see that. Two
- * dots and a labelled KIT fit in the space it frees. */
+ * That reasoning expired the moment it became a jump menu. A phone is where the
+ * scroll is longest and where "take me to §05" is worth the most, so hiding the
+ * one control that does it here would be exactly backwards. It keeps its number
+ * and its chevron and gives up the title, the two hairline rules either side, and
+ * a little of the brand's tracking — which is enough to fit KIT and both toggles
+ * beside it at 320px. */
 @media (max-width: 460px) {
-  .chapter { display: none; }
-  .topbar { grid-template-columns: auto 1fr; }
+  .topbar { grid-template-columns: auto auto 1fr; gap: 10px; }
+  .chapter { gap: 0; }
+  .chapter i { display: none; }
+  #chapter-label .t { display: none; }
+  .chapter-jump { gap: 6px; padding: 5px 0; }
+  /* left-anchored rather than centred: the trigger is 30px wide here and a menu
+     centred on it hangs off the edge of the viewport on the left */
+  .chapter-menu { left: 0; transform: translateX(0) translateY(-6px); min-width: 216px; }
+  .chapter-menu.is-open { transform: translateX(0) translateY(0); }
+  .brand span { letter-spacing: .14em; font-size: 9.5px; }
+  .brand { gap: 8px; }
   .pills { gap: 6px; }
   .pill { padding: 6px 9px; }
 }

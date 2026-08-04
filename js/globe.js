@@ -43,61 +43,88 @@ const RAD = Math.PI / 180;
 const TAU = Math.PI * 2;
 
 /* ===================================================== THE SUN, AND WHERE IT IS
- * ★ THE LIGHT IS LOCKED TO THE CAMERA AGAIN, AND THAT IS A DELIBERATE REVERSAL.
+ * ★ THE LIGHT IS THE REAL ONE — THE ACTUAL SUBSOLAR POINT, AT THE READER'S CLOCK.
  *
- * Theodor: "change the direction the sun comes from, so it's always shining on
- * the side that's towards me looking at the screen."
+ * Theodor: "it would be cool if it was live time, where the sun is shining on the
+ * globe — shadows and stuff — and then have city lights as you have in the dark."
  *
- * Session 4 did the opposite, on his instruction at the time, and did it
- * properly: the sun became a direction in WORLD space at the real subsolar point
- * for Date.now(), so the terminator sat wherever the Earth's actual day/night
- * line was and the camera could drift out from under it. That was correct and it
- * was also the problem — the drift and the per-entry look-ats spend most of their
- * time over Europe at European evening, so the venue the page was talking about
- * was frequently on the unlit side. A globe you cannot read is not a better globe
- * for being astronomically true.
+ * This is the third position this file has held on the question, so the history
+ * matters more than usual. Session 4 made the light a direction in WORLD space at
+ * the real subsolar point. Session 6 reversed it to a fixed direction in CAMERA
+ * space, because the drift and the per-entry look-ats spend most of their time
+ * over Europe at European evening and the venue the page was talking about kept
+ * landing on the unlit side. Session 8 reverses it back, asked for directly and in
+ * full knowledge of that: the terminator is where the Earth's actually is, so
+ * Sweden at three in the morning is dark, and it is dark on purpose.
  *
- * So the light is a direction in CAMERA space and the whole visible face is the
- * day side, by construction, at every camera angle. What is kept from session 4
- * is everything that made it look like a sphere rather than a coin: it is still a
- * real Lambert term against the surface normal, and the terminator is still the
- * great circle where the two are perpendicular. It is simply a great circle that
- * the camera carries with it.
+ * ★ WHAT MAKES THAT AFFORDABLE NOW, WHERE IT WAS NOT IN SESSION 4, is that the
+ * night side has something to show. The city lights channel arrived with the
+ * relief plate afterwards (js/earth.js), so a venue in shadow sits in the middle
+ * of the brightest lit landmass on Earth rather than in a black void — and the
+ * pins are drawn over the surface at full opacity regardless. NIGHT below is
+ * nudged up a little for the same reason. Read is not the same as lit.
  *
- * ★ IT IS NOT HEAD-ON, AND THAT IS THE WHOLE DIFFERENCE. A light straight down
- * the camera axis makes every surface normal on the visible hemisphere face it,
- * which flattens the disc into a bright circle with no form. Offset up and to the
- * left — the light over the reader's shoulder — the Lambert term still falls off
- * toward the lower-right limb, so there is a crescent of shadow hugging the outer
- * fifth of the radius and the eye reads a ball. Below, `terminatorAt` works out
- * where that crescent starts: with these numbers it is at 0.79 of the radius, so
- * four fifths of the face is unambiguously lit.
- * ========================================================================= */
-const SUN = (() => {
-  const x = -0.44, y = 0.38, z = 0.81;      // left, up, toward the camera
-  const L = Math.hypot(x, y, z);
-  return { x: x / L, y: y / L, z: z / L };
-})();
+ * ★ AND THE GEOMETRY CACHE SURVIVED IT, which is the whole engineering problem.
+ * A world-fixed sun means the Lambert term depends on the camera's LONGITUDE, and
+ * longitude is the one thing this globe changes every frame — so the naive version
+ * rebuilds GEO (an asin and an atan2 per pixel) sixty times a second. Instead GEO
+ * now caches pure geometry, the per-pixel surface NORMAL included, and the sun is
+ * rotated into camera space once per frame. What is left per pixel is a three-term
+ * dot product and three lookups. See buildGeo() and LUT.
+ *
+ * The maths is the low-precision solar position from the USNO's Astronomical
+ * Almanac — good to about a hundredth of a degree for any date this page will see,
+ * which is four hundred times finer than one pixel of terminator. */
+const J2000 = 946728000000;                 // 2000-01-01T12:00:00Z, in epoch ms
 
 /**
- * The fraction of the disc radius inside which nothing can be in shadow —
- * published as data-sun-lit so the suite can assert the reader's face of the
- * planet stays lit whatever the camera does.
+ * Where the sun stands overhead at `ms`, as {lat, lon} in degrees.
  *
- * Solve L = 0 for the earliest radius it is reachable at. The in-plane part of
- * the sun has length t and can contribute at most r·t against the surface, so
- * the terminator first appears where r·t = w·SUN.z with w = √(1−r²); that gives
- * r = SUN.z / √(t² + SUN.z²), and SUN is a unit vector, so the denominator is 1.
- * With the current direction that is 0.81 — four fifths of the face, always lit.
+ * `lat` is the solar declination — ±23.44° over the year, and it is what tips the
+ * terminator so the Arctic is lit around the clock in June and never in December.
+ * `lon` is 15° per hour of UTC, corrected by the equation of time: the orbit is
+ * elliptical and the axis is tilted, so apparent noon runs up to ±16 minutes away
+ * from mean noon and the sun is not over Greenwich at 12:00 UTC on any day but
+ * four of them.
  */
-function terminatorAt() {
-  return SUN.z;
+function subsolar(ms) {
+  const d = (ms - J2000) / 86400000;                        // days since J2000.0
+  const wrap = (deg) => ((deg % 360) + 360) % 360;
+  const Lm = wrap(280.460 + 0.9856474 * d);                 // mean longitude, deg
+  const g = wrap(357.528 + 0.9856003 * d) * RAD;            // mean anomaly
+  const lam = (Lm + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * RAD;
+  const eps = (23.4393 - 3.563e-7 * d) * RAD;               // obliquity of the ecliptic
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / RAD;
+  /* The equation of time, in degrees of the Earth's own rotation rather than in
+     minutes — this is going straight into a longitude, and 4 minutes is 1°. `Lm`
+     is reduced first: unreduced it is some ten thousand degrees by 2026 and the
+     difference against a right ascension in (−180, 180] is meaningless. */
+  const eot = (((Lm - ra) + 540) % 360) - 180;
+  const utcH = (ms / 3600000) % 24;
+  // Greenwich hour angle is 15°(h − 12) + eot; the sun stands over its negative
+  return { lat: dec / RAD, lon: (((-(15 * (utcH - 12) + eot)) + 540) % 360) - 180 };
 }
+
+/**
+ * The fraction of the visible disc that is in daylight, from the sun's z in
+ * CAMERA space — the standard phase term, (1 + cos θ)/2, exactly as for a moon.
+ *
+ * Published as data-sun-lit. It replaces a constant: while the light was locked to
+ * the camera this was a fixed property of one hardcoded direction, and the suite
+ * asserted it never moved. It is now the thing that has to MOVE as the camera
+ * turns under a sun that does not — which is how §12d tells a world-locked light
+ * from a camera-locked one without being able to see inside the canvas.
+ */
+const litFraction = (sunZ) => (1 + sunZ) / 2;
 
 /* How dark the night side gets. Not zero: the globe sits behind body copy at low
    opacity and a hemisphere of pure black reads as a bite taken out of the disc
-   rather than as night. Earthshine and airglow are a real thing anyway. */
-const NIGHT = 0.085;
+   rather than as night. Earthshine and airglow are a real thing anyway.
+   ★ Nudged from 0.085. With a real terminator the shadow is no longer a crescent
+   hugging the limb — it can be half the face, with a venue somewhere in it — so
+   the floor has to carry a little more of the coastline than it used to. */
+const NIGHT = 0.105;
 
 /* ★ THE SURFACE RASTER IS CAPPED, AND IT WAS CAPPED TOO LOW.
  *
@@ -323,30 +350,37 @@ export function createGlobe(canvas, opts = {}) {
     cam.a = cam.cLat * cam.sLon; cam.b = cam.cLat * cam.cLon; cam.c = cam.sLat;
   }
 
-  /**
-   * Where the camera-locked sun is standing over the Earth right now — the
-   * subsolar point implied by SUN, in {lat, lon}.
+  /* ★ THE SUN, RESOLVED ONCE PER PAINT AND NOT ONCE PER PIXEL.
    *
-   * Nothing in the render needs this: the shading works in camera space and never
-   * leaves it. It exists so the light is FALSIFIABLE from outside the canvas.
-   * There is no DOM inside a canvas, so the only handle a test has on the lighting
-   * is what paint() writes to data-*, and "the lit face follows the camera" is a
-   * claim about the relationship between two published numbers. Publishing the
-   * sun in camera space would be trivially constant and would prove nothing.
+   * `sun.world` is where it stands over the Earth — the real subsolar point, in
+   * {lat, lon}, published as data-sun-lat/lon so the lighting is FALSIFIABLE from
+   * outside the canvas. There is no DOM inside a canvas, so what paint() writes to
+   * data-* is the only handle a test has on it, and "the light is fixed in world
+   * space" is exactly the claim that these two numbers do NOT move when the camera
+   * does. See trace/verify.mjs §12d.
    *
-   * It is the exact inverse of the rotation buildSurface() used to apply the other
-   * way round, back when the sun was the real one: both rotations are pairs of
-   * planar rotations, so each inverts by its own transpose.
-   */
-  function sunWorld() {
-    const sc = cam.cLat * SUN.y + cam.sLat * SUN.z;          // world z, i.e. sin(lat)
-    const SP = cam.cLat * SUN.z - cam.sLat * SUN.y;
-    const sa = SUN.x * cam.cLon + SP * cam.sLon;
-    const sb = SP * cam.cLon - SUN.x * cam.sLon;
-    return {
-      lat: Math.asin(Math.max(-1, Math.min(1, sc))) / RAD,
-      lon: Math.atan2(sa, sb) / RAD,
-    };
+   * `sun.x/y/z` is the same direction in CAMERA space, which is what the surface
+   * pass actually shades against: x right, y up, z toward the reader. The rotation
+   * is a pair of planar rotations and it is the exact transpose of the one
+   * project() applies to a surface point, so a point whose normal is the sun
+   * direction lands, by construction, at the brightest pixel on the disc.
+   *
+   * ★ The solar position is only recomputed when the CLOCK has moved enough to
+   * matter. It is eight trig calls, which is nothing next to a million pixels —
+   * but the sun travels 0.004° per second, so at 30 Hz all but one frame in
+   * seventy is recomputing a number that has not changed in its fourth decimal. */
+  const sun = { world: { lat: 0, lon: 0 }, x: 0, y: 0, z: 1, at: -1e12 };
+
+  function setSun(now) {
+    if (now - sun.at > 2000) { sun.world = subsolar(Date.now()); sun.at = now; }
+    const cd = Math.cos(sun.world.lat * RAD), sd = Math.sin(sun.world.lat * RAD);
+    const sl = sun.world.lon * RAD;
+    // the same packed basis every point on this globe uses — see packRing()
+    const a = cd * Math.sin(sl), b = cd * Math.cos(sl), c = sd;
+    const P = b * cam.cLon + a * cam.sLon;
+    sun.x = a * cam.cLon - b * cam.sLon;
+    sun.y = cam.cLat * c - cam.sLat * P;
+    sun.z = cam.sLat * c + cam.cLat * P;
   }
 
   /* ------------------------------------------------------------- sizing */
@@ -419,8 +453,8 @@ export function createGlobe(canvas, opts = {}) {
   /* ======================================================= THE SURFACE PASS
    * One ImageData, rebuilt each paint: unproject every pixel inside the limb back
    * to a latitude and longitude, sample the relief plate there, and multiply by
-   * the Lambert term against a sun that is fixed in CAMERA space — see the note
-   * over SUN at the top of this file for why that direction, and not the real one.
+   * the Lambert term against the real sun — see the note over subsolar() at the
+   * top of this file for where that direction comes from.
    *
    * The maths, per pixel, with the disc centred and v measured upward:
    *
@@ -428,14 +462,16 @@ export function createGlobe(canvas, opts = {}) {
    *   w = √(1−u²−v²)  the third component of the surface normal, toward the camera
    *   lat = asin(w·sinφ₀ + v·cosφ₀)
    *   lon = λ₀ + atan2(u, w·cosφ₀ − v·sinφ₀)
-   *   L   = u·SUN.x + v·SUN.y + w·SUN.z          the Lambert term
+   *   L   = u·sun.x + v·sun.y + w·sun.z          the Lambert term
    *
-   * ★ THE SUN NO LONGER HAS TO BE ROTATED INTO THE CAMERA'S BASIS. It is already
-   * expressed there, which deletes eight multiplies and two trig calls per frame
-   * and — much more to the point — removes the only remaining reason this pass
-   * had to run when nothing had moved. With MOTION off the globe is now genuinely
-   * static; before this, the terminator crept 15°/hour and the still-frame
-   * signature had to carry the subsolar longitude to let it.
+   * ★ THE THIRD LINE IS CACHED AND THE FOURTH IS NOT, AND THAT SPLIT IS THE WHOLE
+   * DESIGN. The unprojection is the expensive half — an asin and an atan2 — and it
+   * does not depend on the camera's longitude at all, so it survives the drift (see
+   * GEO). The Lambert term against a world-fixed sun does depend on longitude, so
+   * it cannot; what it costs instead is a three-term dot product against a normal
+   * the same cache already holds, and three reads from a 1 024-entry table. That is
+   * about a fifth of what one bilinear plate fetch costs, which is why a real
+   * terminator is affordable at 1 024² and a rebuilt GEO would not have been.
    *
    * ★ IT IS RASTERED SMALL AND SCALED UP. See RASTER_MAX. The vector coastline is
    * still stroked over the top at full resolution, which is where the eye actually
@@ -485,54 +521,69 @@ export function createGlobe(canvas, opts = {}) {
    *     lon = λ₀ + atan2(u, w·cosφ₀ − v·sinφ₀)
    *
    * λ₀ — the camera longitude — appears exactly once, as a term ADDED at the end.
-   * Everything else is a function of the pixel and of the camera LATITUDE only. So
-   * is the Lambert term, because the sun is fixed in camera space now; so is the
-   * fresnel, the coverage alpha and the dusk falloff. Every one of those is
-   * constant while the planet spins.
+   * Everything else is a function of the pixel and of the camera LATITUDE only: the
+   * surface normal, the fresnel, the coverage alpha and the sampling footprint.
    *
-   * And spinning is all it normally does: the idle drift is `state.tLon += …`, and
-   * the latitude only moves when a look-at aims at a venue. So the per-pixel
-   * geometry — two `sqrt`s, an `asin` and an `atan2`, which is the expensive part
-   * — is computed once into these flat arrays and then reused for as long as the
-   * camera stays at that latitude. Per frame, what is left is a texel offset, one
-   * bilinear fetch and a multiply.
+   * And spinning is all the camera normally does: the idle drift is `state.tLon +=
+   * …`, and the latitude only moves when a look-at aims at a venue. So the
+   * per-pixel geometry — two `sqrt`s, an `asin` and an `atan2`, which is the
+   * expensive part — is computed once into these flat arrays and then reused for as
+   * long as the camera stays at that latitude.
    *
    * Measured: 13.2 → 9.7 ms at the old 420, and it is what makes 700 fit in
    * 30 Hz at all (18–20 ms against 36 ms for the uncached pass at 640).
+   *
+   * ★ THE SHADING IS NO LONGER IN HERE, AND THE THEME NO LONGER KEYS IT. A real
+   * sun is fixed in WORLD space, so the Lambert term moves with λ₀ and is the one
+   * thing that genuinely cannot be cached against latitude. What replaced `sh`,
+   * `gl` and `du` is the NORMAL — nx, ny, nz — which is pure geometry, and the
+   * per-frame pass dots it against the sun and reads the answer out of LUT below.
+   * That costs the same three arrays it used to, at half the width, and it means a
+   * theme change no longer throws the whole unprojection away.
+   *
+   * ★ nx/ny/nz ARE INT16, at 1/30 000 of a unit. The Lambert term feeds a
+   * 1 024-entry table, so a thousandth of a unit would do; what the fixed point is
+   * really buying is halved memory traffic on the hottest read in the file. The
+   * scale is folded into the sun vector at the top of the frame, so nothing is
+   * multiplied out per pixel. 30 000 rather than 32 767 because `w` is clamped to
+   * zero one texel PAST the limb — see the coverage note below — so the stored
+   * normal can be a hair longer than unit there and must not wrap.
    *
    * ★ ONLY PIXELS THE DISC TOUCHES ARE IN HERE, in a flat run, so the per-frame
    * loop has no bounds test and no branch. `idx` carries each one's byte offset
    * into the output, which is why they can be stored compacted.
    * ==================================================================== */
-  const geo = { key: '', n: 0, idx: null, ty: null, xo: null, sh: null, gl: null, du: null, al: null };
+  const N16 = 30000, INV_N16 = 1 / N16;
+  /* The sampling footprint, in texels at 1/32 — see FOOTPRINT below. Capped at
+     eight: past that the four taps are too far apart to be an average of anything,
+     and the honest figure runs to 80-odd texels in the last pixel before the
+     silhouette, where a raster pixel really does cover a quarter of the planet.
+     Measured over a 1 024² disc at the hero's latitude, 83.4% of it never leaves
+     plain bilinear, 15% takes a tap under two texels wide, and 0.11% — a ring
+     about a pixel thick, already under the coverage feather and the fresnel — is
+     what this clamps. */
+  const F16 = 32, INV_F16 = 1 / F16, F_MAX = 8 * F16;
+  const geo = {
+    key: '', n: 0, idx: null, ty: null, xo: null,
+    nx: null, ny: null, nz: null, fx: null, fy: null, al: null,
+  };
 
-  function buildGeo(R, isDay) {
+  function buildGeo(R) {
     const cap = R * R;
     if (!geo.idx || geo.idx.length < cap) {
       geo.idx = new Int32Array(cap);
       geo.ty = new Float32Array(cap); geo.xo = new Float32Array(cap);
-      geo.sh = new Float32Array(cap); geo.gl = new Float32Array(cap);
-      geo.du = new Float32Array(cap); geo.al = new Uint8Array(cap);
+      geo.nx = new Int16Array(cap); geo.ny = new Int16Array(cap); geo.nz = new Int16Array(cap);
+      geo.fx = new Int16Array(cap); geo.fy = new Int16Array(cap);
+      geo.al = new Uint8Array(cap);
     }
-    const { idx, ty, xo, sh, gl, du, al } = geo;
+    const { idx, ty, xo, nx, ny, nz, fx, fy, al } = geo;
     const half = R / 2, inv = 1 / half;
     const { sLat, cLat } = cam;
-    const sx = SUN.x, sy = SUN.y, sz = SUN.z;
     const INV_PI = 1 / Math.PI;
-
-    /* The day theme is not an inverted night theme anywhere else on this page and
-       it is not here either — see the note at the end of README.md.
-       ★ The DAY side needs MORE contrast between lit and unlit, not less. app.css
-       holds the disc at 34% opacity there so a lit ocean does not sit behind body
-       copy, and at 34% over warm paper a gentle terminator washes out completely —
-       the sphere reads as one flat grey coin and the whole point of a real sun is
-       lost. */
-    const gain = isDay ? 1.30 : 0.95;
-    const ambient = isDay ? NIGHT * 1.35 : NIGHT;
-    /* How hard the city lights burn on the shadowed crescent. The day theme holds
-       the whole disc at 34% opacity over warm paper, where a warm glow on a warm
-       ground is just mud, so it gets a third of the night side's. */
-    const lampGain = isDay ? 0.34 : 1.0;
+    /* how many plate texels one raster pixel spans at the sub-camera point, per
+       axis — the scale the footprint below is measured against. See FOOTPRINT. */
+    const pxU = 2 / R, texX = PLATE_W / TAU, texY = PLATE_H / Math.PI;
 
     let k = 0;
     for (let py = 0; py < R; py++) {
@@ -562,39 +613,145 @@ export function createGlobe(canvas, opts = {}) {
         const cov = (1 - Math.sqrt(1 - w2)) / inv + 0.5;
         if (cov <= 0) continue;
 
-        const L = u * sx + v * sy + w * sz;
-        /* A hard L>0 cut gives a terminator one pixel wide, and the real one is a
-           few hundred kilometres of twilight. Softened over ±0.16 of the cosine,
-           which is about 9° of arc — close enough to civil twilight to read right. */
-        let lit = L <= -0.16 ? 0 : (L >= 0.16 ? 1 : (L + 0.16) / 0.32);
-        lit = lit * lit * (3 - 2 * lit);                 // smoothstep
-
         const lat = Math.asin(w * sLat + vLat);
         const lam = Math.atan2(u, w * cLat + vDen);      // λ₀ is added per frame
-        const fres = 1 - w;
-        /* ★ THE LIGHTS DO NOT WAIT FOR FULL NIGHT, and they must not. Gated on
-           `lit`, which the terminator drives to zero over ±0.16 of the cosine, the
-           lights only existed inside a band a few pixels wide at the very edge of
-           the disc and were effectively invisible. `dusk` is a second, much wider
-           falloff on the same Lambert term — they start showing at about 0.6 of the
-           radius and reach full strength at the limb, which is exactly what a city
-           looks like from orbit at dusk. */
-        const dusk = L >= 0.30 ? 0 : (L <= -0.10 ? 1 : (0.30 - L) / 0.40);
+
+        /* ================================================== FOOTPRINT
+         * ★ HOW MANY TEXELS THIS ONE PIXEL IS RESPONSIBLE FOR, which is the other
+         * half of "a bit of stuff moving on islands and on the land".
+         *
+         * js/earth.js fixed the surplus detail near the POLES, which is a property
+         * of the plate and is dealt with once at boot. This is the surplus near the
+         * LIMB, which is a property of the camera and cannot be: an orthographic
+         * sphere is edge-on there, so a pixel a tenth of a radius from the
+         * silhouette covers about three times the ground a pixel at the centre
+         * does, and at the silhouette itself the figure is unbounded. Every one of
+         * those texels the bilinear fetch does not land on is detail that changes
+         * as the planet turns — which is the crawl, and it is worst on exactly the
+         * small high-contrast features the report names.
+         *
+         * So the footprint is measured properly rather than guessed, per axis,
+         * from the analytic derivatives of the unprojection. cos²φ = A² + B² falls
+         * straight out of the atan2 above, and ∂w/∂u = −u/w is the only other
+         * ingredient. The two axes are kept SEPARATE on purpose: the compression
+         * is radial, so at the left and right limb it is almost entirely in
+         * longitude and at the top and bottom almost entirely in latitude, and one
+         * isotropic figure would blur each of them across the axis that was still
+         * perfectly well sampled. That reads as a mushy ring round the disc.
+         *
+         * What is stored is the EXCESS over what the plate already carries —
+         * quadrature, because filter widths add in variance — so it is zero over
+         * most of the disc and the per-frame loop pays nothing for it there. In x
+         * the plate is already band-limited to sec(φ) texels by the polar
+         * prefilter, which is why that term and not 1 is what is subtracted. */
+        const A = u, B = w * cLat + vDen;
+        /* A² + B² is cos²(lat) identically — the atan2 above is
+           atan2(cosφ·sinΔλ, cosφ·cosΔλ) — so the cosine the derivatives need is
+           already paid for, and taking it this way keeps it exact at the poles
+           where cos(asin(…)) loses its last digits. */
+        const c2 = A * A + B * B, cp = Math.sqrt(c2);
+        let ex = 0, ey = 0;
+        if (w > 1e-4 && cp > 1e-4) {
+          const iw = 1 / w;
+          const dLatU = -sLat * u * iw / cp;                    // ∂lat/∂u
+          const dLatV = (cLat - sLat * v * iw) / cp;            // ∂lat/∂v
+          const dLonU = (B + A * cLat * u * iw) / c2;           // ∂lon/∂u
+          const dLonV = A * (cLat * v * iw + sLat) / c2;        // ∂lon/∂v
+
+          const fxT = pxU * texX * Math.hypot(dLonU, dLonV);
+          const fyT = pxU * texY * Math.hypot(dLatU, dLatV);
+          const sec = 1 / cp;                        // what the prefilter left in x
+          ex = Math.sqrt(Math.max(0, fxT * fxT - sec * sec)) / 2;
+          ey = Math.sqrt(Math.max(0, fyT * fyT - 1)) / 2;
+        }
+        /* Under half a texel there is nothing a wider tap could recover, and the
+           per-frame branch is written so that a zero here costs one comparison. */
+        const exq = ex < 0.5 ? 0 : Math.min(F_MAX, Math.round(ex * F16));
+        const eyq = ey < 0.5 ? 0 : Math.min(F_MAX, Math.round(ey * F16));
 
         idx[k] = (py * R + pxi) * 4;
         ty[k] = (0.5 - lat * INV_PI) * PLATE_H;
         xo[k] = (lam * INV_PI * 0.5 + 0.5) * PLATE_W;
-        sh[k] = ambient + (gain - ambient) * lit;
-        /* Atmosphere: a fresnel term toward the limb, tinted blue and scaled by
-           how lit that part of the limb is — the bright crescent is on the day
-           edge, wherever the camera has put it. */
-        gl[k] = fres * fres * fres * 0.85 * lit;
-        du[k] = dusk * dusk * (2 - dusk) * lampGain * 0.0032;
+        nx[k] = u * N16; ny[k] = v * N16; nz[k] = w * N16;
+        fx[k] = exq; fy[k] = eyq;
         al[k] = cov >= 1 ? 255 : cov * 255;
         k++;
       }
     }
     geo.n = k;
+  }
+
+  /* ================================================== LUT — THE SHADING TABLE
+   * Everything the Lambert term drives is a function of that ONE number, so all of
+   * it is tabulated over L ∈ [−1, 1] once per theme and read back with a multiply
+   * and a truncation. It replaces three smoothsteps and six branches per pixel per
+   * frame, which is what a world-fixed sun would otherwise have cost — see the
+   * note over GEO. 1 024 entries puts 164 of them inside the ±0.16 twilight band,
+   * so the terminator is smooth to well under a level of output.
+   * ==================================================================== */
+  const LUT_N = 1024, LUT_MAX = LUT_N - 1, LUT_K = LUT_MAX / 2;
+  const lut = {
+    theme: null,
+    sh: new Float32Array(LUT_N), gl: new Float32Array(LUT_N), du: new Float32Array(LUT_N),
+  };
+
+  /** L ∈ [−1, 1] to a table row. Clamped, and it has to be: `w` is pinned to zero
+   *  one texel PAST the limb so the coverage alpha can feather there, which leaves
+   *  the stored normal a thousandth longer than unit and L a thousandth over 1. */
+  function lutAt(L) {
+    const i = (L + 1) * LUT_K;
+    return i < 0 ? 0 : (i > LUT_MAX ? LUT_MAX : i | 0);
+  }
+
+  function buildLut(isDay) {
+    /* The day theme is not an inverted night theme anywhere else on this page and
+       it is not here either — see the note at the end of README.md.
+       ★ The DAY side needs MORE contrast between lit and unlit, not less. app.css
+       holds the disc at 34% opacity there so a lit ocean does not sit behind body
+       copy, and at 34% over warm paper a gentle terminator washes out completely —
+       the sphere reads as one flat grey coin and the whole point of a real sun is
+       lost. */
+    const gain = isDay ? 1.30 : 0.95;
+    const ambient = isDay ? NIGHT * 1.35 : NIGHT;
+    /* How hard the city lights burn on the shadowed side.
+     * ★ TURNED DOWN BY NEARLY HALF, AND THE REAL SUN IS WHY.
+     * This was 1.0, and 1.0 was right for what it was tuned against: a shadowed
+     * CRESCENT hugging the limb, a few pixels wide, where the surface is
+     * foreshortened to nothing and the fresnel haze is doing most of the drawing.
+     * A world-fixed sun makes that crescent a whole hemisphere, and the same gain
+     * across a hemisphere at normal incidence is a different picture entirely.
+     * Measured at 23:00 UTC with the camera on Europe: the lights peaked at 101%
+     * of the daylit ground's own peak and their mean ran three times the day
+     * side's, so the night half of the disc was the BRIGHTER half and the
+     * terminator stopped being an event. Cities are meant to read as a glow in the
+     * haze, not as a second daylight.
+     * The day theme keeps its third of whatever this is: it holds the whole disc
+     * at 34% opacity over warm paper, where a warm glow on warm ground is mud. */
+    const lampGain = isDay ? 0.19 : 0.58;
+
+    for (let i = 0; i < LUT_N; i++) {
+      const L = i / LUT_K - 1;
+      /* A hard L>0 cut gives a terminator one pixel wide, and the real one is a
+         few hundred kilometres of twilight. Softened over ±0.16 of the cosine,
+         which is about 9° of arc — close enough to civil twilight to read right. */
+      let lit = L <= -0.16 ? 0 : (L >= 0.16 ? 1 : (L + 0.16) / 0.32);
+      lit = lit * lit * (3 - 2 * lit);                   // smoothstep
+      /* ★ THE LIGHTS DO NOT WAIT FOR FULL NIGHT, and they must not. Gated on
+         `lit`, which the terminator drives to zero over ±0.16 of the cosine, the
+         lights only existed inside a band a few pixels wide and were effectively
+         invisible. `dusk` is a second, much wider falloff on the same Lambert
+         term, so they come up through the evening the way a city actually does
+         from orbit. With a real sun that band now sweeps Europe every night. */
+      const dusk = L >= 0.30 ? 0 : (L <= -0.10 ? 1 : (0.30 - L) / 0.40);
+
+      lut.sh[i] = ambient + (gain - ambient) * lit;
+      /* Atmosphere: the fresnel toward the limb is per-pixel and stays there; what
+         belongs to L is how LIT that part of the limb is, so the bright crescent
+         sits on the day edge wherever the sun has actually put it. */
+      lut.gl[i] = 0.85 * lit;
+      lut.du[i] = dusk * dusk * (2 - dusk) * lampGain * 0.0032;
+    }
+    lut.theme = isDay ? 'day' : 'night';
   }
 
   function buildSurface(isDay) {
@@ -607,12 +764,15 @@ export function createGlobe(canvas, opts = {}) {
       surf.size = R;
       geo.key = '';                       // a different raster is different geometry
     }
-    /* ★ Quantised to a tenth of a degree. The cache is only invalidated by the
-       camera's LATITUDE (and the raster size, and the theme, both of which change
-       rarely) — so at the hero, where the latitude is fixed and only the drift
-       runs, this is built once for the life of the page. */
-    const key = R + '|' + state.lat.toFixed(1) + '|' + (isDay ? 'd' : 'n');
-    if (geo.key !== key) { buildGeo(R, isDay); geo.key = key; }
+    /* ★ Quantised to a tenth of a degree, and the THEME IS NO LONGER IN THE KEY —
+       the shading moved to LUT, so a day/night switch now costs a 1 024-entry
+       table rather than a million unprojections. The cache is invalidated by the
+       camera's LATITUDE and the raster size only, so at the hero, where the
+       latitude is fixed and only the drift runs, it is built once for the life of
+       the page — with a world-fixed sun turning over the top of it. */
+    const key = R + '|' + state.lat.toFixed(1);
+    if (geo.key !== key) { buildGeo(R); geo.key = key; }
+    if (lut.theme !== (isDay ? 'day' : 'night')) buildLut(isDay);
 
     /* ★ The clock starts AFTER the geometry build, deliberately. buildGeo() is
        amortised — at the hero it runs once for the life of the page — so charging
@@ -625,15 +785,21 @@ export function createGlobe(canvas, opts = {}) {
     out.fill(0);
 
     const px = PLATE.px;
-    const { n, idx, ty, xo, sh, gl, du, al } = geo;
+    const { n, idx, ty, xo, nx, ny, nz, fx, fy, al } = geo;
+    const LSH = lut.sh, LGL = lut.gl, LDU = lut.du;
     // the camera's longitude, in texels — the one thing that changes per frame
     const lonTex = state.lon / 360 * PLATE_W;
+    /* ★ The 1/30 000 that turns the packed Int16 normal back into a unit vector is
+       folded into the sun here, once, rather than into three multiplies a pixel. */
+    const sux = sun.x * INV_N16, suy = sun.y * INV_N16, suz = sun.z * INV_N16;
 
     if (!px) {
       // the plate has not baked yet, or could not be read — a plain ocean, so the
       // disc is never a hole while the imagery is in flight
       for (let i = 0; i < n; i++) {
-        const o = idx[i], s = sh[i], g = gl[i];
+        const li = lutAt(nx[i] * sux + ny[i] * suy + nz[i] * suz);
+        const o = idx[i], s = LSH[li];
+        const f = 1 - nz[i] * INV_N16, g = f * f * f * LGL[li];
         out[o] = 14 * s + 120 * g;
         out[o + 1] = 38 * s + 172 * g;
         out[o + 2] = 58 * s + 214 * g;
@@ -649,22 +815,52 @@ export function createGlobe(canvas, opts = {}) {
       tx = tx - Math.floor(tx / PLATE_W) * PLATE_W;      // wrap the seam
       const t = ty[i];
 
-      const ix = tx | 0, iy = t < 0 ? 0 : (t > PLATE_H - 1 ? PLATE_H - 1 : t | 0);
-      const fx = tx - ix, fy = t - iy;
-      const ix1 = ix + 1 >= PLATE_W ? 0 : ix + 1;
-      const iy1 = iy + 1 >= PLATE_H ? PLATE_H - 1 : iy + 1;
-      const r0 = (iy * PLATE_W) * 4, r1 = (iy1 * PLATE_W) * 4;
-      const a0 = r0 + ix * 4, b0 = r0 + ix1 * 4;
-      const a1 = r1 + ix * 4, b1 = r1 + ix1 * 4;
-      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
-      const w01 = (1 - fx) * fy, w11 = fx * fy;
+      let a0, b0, a1, b1, w00, w10, w01, w11;
+      const ex = fx[i], ey = fy[i];
+      if (ex | ey) {
+        /* ★ THE WIDE TAP, and it is the same four fetches. See FOOTPRINT in
+           buildGeo(): this pixel covers more than one texel of plate, so instead
+           of interpolating BETWEEN two adjacent texels it averages four spread to
+           the width it is actually responsible for. A box rather than a triangle,
+           which is the wrong reconstruction filter to magnify with and the right
+           one to MINIFY with — and minifying is the only thing that ever gets
+           here, because the excess is zero everywhere the disc is not compressed.
+           Equal weights, so nothing has to be normalised. */
+        const hx = ex * INV_F16, hy = ey * INV_F16;
+        let xa = tx - hx, xb = tx + hx;
+        xa -= Math.floor(xa / PLATE_W) * PLATE_W;
+        xb -= Math.floor(xb / PLATE_W) * PLATE_W;
+        const ya = t - hy < 0 ? 0 : (t - hy > PLATE_H - 1 ? PLATE_H - 1 : t - hy);
+        const yb = t + hy < 0 ? 0 : (t + hy > PLATE_H - 1 ? PLATE_H - 1 : t + hy);
+        const rA = (ya | 0) * PLATE_W * 4, rB = (yb | 0) * PLATE_W * 4;
+        const cA = (xa | 0) * 4, cB = (xb | 0) * 4;
+        a0 = rA + cA; b0 = rA + cB; a1 = rB + cA; b1 = rB + cB;
+        w00 = w10 = w01 = w11 = 0.25;
+      } else {
+        const ix = tx | 0, iy = t < 0 ? 0 : (t > PLATE_H - 1 ? PLATE_H - 1 : t | 0);
+        const gx = tx - ix, gy = t - iy;
+        const ix1 = ix + 1 >= PLATE_W ? 0 : ix + 1;
+        const iy1 = iy + 1 >= PLATE_H ? PLATE_H - 1 : iy + 1;
+        const r0 = (iy * PLATE_W) * 4, r1 = (iy1 * PLATE_W) * 4;
+        a0 = r0 + ix * 4; b0 = r0 + ix1 * 4;
+        a1 = r1 + ix * 4; b1 = r1 + ix1 * 4;
+        w00 = (1 - gx) * (1 - gy); w10 = gx * (1 - gy);
+        w01 = (1 - gx) * gy; w11 = gx * gy;
+      }
 
-      const s = sh[i], g = gl[i], o = idx[i];
+      /* ★ The sun, per pixel: one dot product against the cached normal and three
+         table reads. Everything else about the lighting was resolved once, either
+         in buildGeo() (the normal, the fresnel) or in buildLut() (the terminator,
+         the twilight, the theme's gain). See the note over GEO. */
+      const li = lutAt(nx[i] * sux + ny[i] * suy + nz[i] * suz);
+      const o = idx[i], s = LSH[li];
+      const fres = 1 - nz[i] * INV_N16;
+      const g = fres * fres * fres * LGL[li];
       /* ★ The fourth channel of the plate is not opacity, it is CITY LIGHT —
-         js/earth.js bakes the emission there so both come out of one bilinear
-         fetch. It is sampled with the same four weights, four multiplies. */
+         js/earth.js bakes the emission there so both come out of one fetch. It is
+         sampled with the same four weights, four multiplies. */
       const night = (px[a0 + 3] * w00 + px[b0 + 3] * w10 +
-                     px[a1 + 3] * w01 + px[b1 + 3] * w11) * du[i];
+                     px[a1 + 3] * w01 + px[b1 + 3] * w11) * LDU[li];
       /* ★ A ±1 LEVEL DITHER, and it is not superstition. The sea runs a smooth
          ramp from shelf to deep across a third of the disc and the fresnel runs
          another across the limb; at 8 bits both band into visible contour rings,
@@ -782,11 +978,15 @@ export function createGlobe(canvas, opts = {}) {
     const accent = layers.accent;
 
     setCam();
+    // the camera moved, so the sun's direction IN CAMERA SPACE did too — even
+    // though the sun itself has not. setSun() rotates one; the clock moves the
+    // other, twice a minute at most. See the note over `sun`.
+    setSun(performance.now());
 
     // -- the atmosphere ring outside the limb
     ctx.drawImage(layers.air, 0, 0, w, h);
 
-    /* -- the surface: shaded relief, lit from over the reader's shoulder.
+    /* -- the surface: shaded relief, lit by the sun that is actually up.
      *    Rastered small (see RASTER_MAX) and scaled up here, which is the one
      *    place smoothing is wanted — the alternative is visible raster texels.
      *
@@ -974,16 +1174,18 @@ export function createGlobe(canvas, opts = {}) {
          budget, forever, with motion off. verify.mjs §8 caught it: the starfield
          sat correctly at 0 Hz while the globe ran at its budget beside it.
          With motion off, paint only when something has genuinely changed. */
-      /* ★ THE SUN IS OUT OF THE SIGNATURE AGAIN. It had to be in it while the
-         light was fixed in world space: a real terminator creeps 15°/hour whether
-         or not the camera moves, so the still frame had to be allowed to repaint
-         about fifteen times an hour to keep up with it. Locked to the camera the
-         light cannot change unless the camera does, and the camera is already the
-         first two fields — so MOTION off is now a genuinely dead canvas. */
+      /* ★ THE SUN IS BACK IN THE SIGNATURE, because it is a real one again. A
+         world-fixed terminator creeps 15°/hour whether or not the camera moves, so
+         a still frame that ignored it would freeze the planet at the moment MOTION
+         was switched off and drift further from the truth all evening.
+         At a tenth of a degree that is a repaint every twenty-four seconds — two
+         and a half a minute against verify.mjs §8's ceiling of two per SECOND, so
+         "MOTION off actually stops the canvases" still holds by two orders of
+         magnitude, and the shadow still arrives where the reader expects it. */
       const sig = state.lon.toFixed(2) + '|' + state.lat.toFixed(2) + '|' +
                   state.dim.toFixed(2) + '|' + state.focus + '|' +
                   document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h +
-                  '|' + (PLATE.ready ? 1 : 0);
+                  '|' + (PLATE.ready ? 1 : 0) + '|' + subsolar(Date.now()).lon.toFixed(1);
       if (sig === stillSig && !layers.dirty) return;
       stillSig = sig;
     }
@@ -1025,25 +1227,26 @@ export function createGlobe(canvas, opts = {}) {
     canvas.dataset.lon = state.lon.toFixed(1);
     canvas.dataset.lat = state.lat.toFixed(1);
     canvas.dataset.paints = ++paints;
-    /* ★ The sun, published for the same reason and now asserting the OPPOSITE
-       thing. verify.mjs §12d used to prove the light was fixed in world space by
-       moving the camera and watching these two stay put. The light is locked to
-       the camera now, so the same two fields have to move WITH it, exactly — the
-       sub-solar point implied by a camera-space sun is `sunWorld()` below, and a
-       check that turns the planet and asserts the sun turned by the same amount is
-       the only way to tell "locked to the camera" from "stuck". `plate` says
-       whether the relief actually baked, so a tainted or missing source fails
-       loudly instead of quietly degrading to a flat blue ball. */
-    const sun = sunWorld();
-    canvas.dataset.sunLat = sun.lat.toFixed(2);
-    canvas.dataset.sunLon = sun.lon.toFixed(2);
-    canvas.dataset.sunLock = 'camera';
-    canvas.dataset.sunLit = terminatorAt().toFixed(3);
     canvas.dataset.plate = PLATE.ready ? 'ready' : (PLATE.failed ? 'failed' : 'loading');
     canvas.dataset.plateKind = PLATE.detail || '';
 
     paint();
     canvas.dataset.raster = String(surf.size);   // set by paint(), so read it after
+    /* ★ The sun, published for the same reason and asserting the OPPOSITE thing
+       again — see the history over subsolar(). The light is fixed in WORLD space,
+       so `sunLat`/`sunLon` are the real subsolar point and must NOT follow the
+       camera: they move 0.004° a second and nothing the reader does changes them.
+       What does move is `sunLit`, the lit fraction of the visible face, because
+       turning the planet carries the reader's face in and out of the day side.
+       One pair still, one pair moving — which is how verify.mjs §12d tells a real
+       sun from a camera-locked one without being able to see inside the canvas.
+       ★ Read AFTER paint() for the same reason `raster` is: the camera-space sun
+       is resolved inside it, and publishing a frame-old direction would make the
+       lit fraction disagree with the pixels it is supposed to describe. */
+    canvas.dataset.sunLat = sun.world.lat.toFixed(2);
+    canvas.dataset.sunLon = sun.world.lon.toFixed(2);
+    canvas.dataset.sunLock = 'world';
+    canvas.dataset.sunLit = litFraction(sun.z).toFixed(3);
     /* ★ What the surface pass costs and what the ladder made of it — see
        RASTER_LADDER. Published because "it backs off when it cannot hold the
        budget" is a claim about a number no test can otherwise see, and because a

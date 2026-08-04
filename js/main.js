@@ -327,13 +327,28 @@ function renderChips() {
 
 /* Three indices per date, each scored 0–100 against the whole atlas, with the real
    quantity printed beside the bar so the index never has to be taken on trust. */
+/* ★ THE UNITS ARE SPELT OUT NOW, and one of them was genuinely unreadable.
+ *
+ * Theodor, on a date's TECHNICAL bar: "13.1 c/km — like, what is that? Ten
+ * corners, or what is that?"
+ *
+ * It was corners per kilometre, and there was nothing on the page that said so.
+ * `c/km` is the sort of abbreviation that is obvious to whoever wrote the line and
+ * to nobody else: `c` is not a unit anyone has met, and next to `m` two rows below
+ * it reads as another length. The bar's whole design is that the index is never
+ * taken on trust — the real quantity is printed beside it — and a quantity in a
+ * unit the reader has to guess at is not printed at all.
+ *
+ * `d` for days went the same way, for the same reason and with less excuse. The
+ * value column is `auto`, so both simply take the width they need. */
 function bars(e) {
   const t = e.venue.track || {};
-  const dur = ['DURATION', (e.days || 1) / 3 * 100, String(e.days || 1), 'd'];
+  const days = e.days || 1;
+  const dur = ['DURATION', days / 3 * 100, String(days), days === 1 ? 'day' : 'days'];
   const out = [];
   if (t.corners && t.lengthM) {
     const dens = t.corners / (t.lengthM / 1000);
-    out.push(['TECHNICAL', dens / MAX.density * 100, dens.toFixed(1), 'c/km']);
+    out.push(['TECHNICAL', dens / MAX.density * 100, dens.toFixed(1), 'corners/km']);
   } else {
     out.push(dur);
   }
@@ -1309,6 +1324,146 @@ function splitTitle() {
   if (mark) h.appendChild(mark);
 }
 
+/* ============================================================== CHAPTER JUMP
+ * ★ THE ONE PIECE OF NAVIGATION THIS PAGE DID NOT HAVE.
+ *
+ * Theodor: "it's a lot of scrolling on this website — the kit itself, I could just
+ * press KIT at the top right and it gives me the kit. Maybe it's good with a main
+ * page where all the chapters are."
+ *
+ * Two readings of that, and the cheap one is right. A home page in front of a page
+ * whose entire form is one descent through six chapters would be a second front
+ * door onto a building that is already a corridor — and it would put a click
+ * between the reader and the hero, which is the best thing here. What KIT actually
+ * demonstrated is narrower and it is the thing that was missing: a way OUT of the
+ * middle of the scroll, from wherever you happen to be, in the bar that is on
+ * screen at every scroll position anyway.
+ *
+ * So the chapter readout — which has always been in that bar, reporting §03 while
+ * you read §03 — opens. It is the same fixture doing the same job with one more
+ * verb attached, and the bar grows nothing.
+ *
+ * ★ THE RUNNING ORDER IS READ FROM THE DOCUMENT, never retyped. Every entry comes
+ * from a `section[data-chapter]` and its own `data-chapter`/`data-title`, which are
+ * the same two attributes js/scroll.js reads to write the label. Adding §06 to
+ * index.html adds it here, correctly numbered, with nothing else touched — and
+ * there is no second copy of the running order to fall out of step with the first.
+ * ======================================================================== */
+function initChapterNav() {
+  const trigger = $('#chapter-jump');
+  const menu = $('#chapter-menu');
+  const sections = [...document.querySelectorAll('section[data-chapter]')];
+  if (!trigger || !menu || !sections.length) return { mark() {} };
+
+  const items = sections.map((sec) => {
+    const b = el('button');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.dataset.id = sec.id;
+    b.setAttribute('aria-current', 'false');
+    b.innerHTML = `<span class="n">${esc(sec.dataset.chapter || '')}</span>` +
+                  `<span class="t">${esc(sec.dataset.title || sec.id)}</span>` +
+                  `<span class="at" aria-hidden="true"></span>`;
+    /* focus goes back to the trigger, not to the destination. The row is about to
+       be `display:none` and focus would fall to <body>, which strands a keyboard
+       reader at the top of a page they just asked to be moved down; the trigger is
+       in the fixed bar, so it is on screen wherever the jump landed. */
+    b.addEventListener('click', () => { close(true); scrollToEl(sec, 8); });
+    menu.appendChild(b);
+    return b;
+  });
+
+  let open = false;
+  let opened = -1e9;              // when, for the scroll-dismiss grace window
+
+  /* `hidden` is toggled on either side of the transition rather than instead of
+     it: `display:none` cannot animate, and a menu that is only faded out still
+     answers the pointer and still takes tab focus. One frame's delay on the way in
+     is what lets the opening transform run at all. */
+  function show() {
+    if (open) return;
+    open = true;
+    opened = performance.now();
+    menu.hidden = false;
+    requestAnimationFrame(() => menu.classList.add('is-open'));
+    trigger.setAttribute('aria-expanded', 'true');
+  }
+
+  function close(focusTrigger) {
+    if (!open) return;
+    open = false;
+    menu.classList.remove('is-open');
+    trigger.setAttribute('aria-expanded', 'false');
+    /* No motion means no transitionend — app.css turns the transition off wholesale
+       for `body.no-motion` — so the hide is on a timer that beats it either way. */
+    setTimeout(() => { if (!open) menu.hidden = true; }, 200);
+    if (focusTrigger) trigger.focus();
+  }
+
+  trigger.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    open ? close() : show();
+  });
+  /* Down-arrow from the closed trigger opens and lands on the first row, which is
+     what a reader who is already on the keyboard will try before anything else. */
+  trigger.addEventListener('keydown', (ev) => {
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      show();
+      requestAnimationFrame(() => items[ev.key === 'ArrowUp' ? items.length - 1 : 0].focus());
+    }
+  });
+
+  menu.addEventListener('keydown', (ev) => {
+    const i = items.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      const d = ev.key === 'ArrowDown' ? 1 : -1;
+      items[(i + d + items.length) % items.length].focus();
+    } else if (ev.key === 'Home') { ev.preventDefault(); items[0].focus(); }
+    else if (ev.key === 'End') { ev.preventDefault(); items[items.length - 1].focus(); }
+  });
+
+  /* Escape and a click anywhere else, on the document rather than on a scrim: the
+     panel already owns a full-screen overlay and a second one under the topbar
+     would eat the very clicks — a pill, a link in the page — that ought to close
+     this and do their own job in the same gesture. `capture` so it still fires
+     when the click lands on something that stops propagation on the way up. */
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && open) close(true); });
+  document.addEventListener('click', (ev) => {
+    /* `contains`, not `===`: the trigger wraps a span and an svg, so a click on the
+       chevron has the PATH as its target and an identity test would read it as an
+       outside click — close here, reopen in the trigger's own handler a moment
+       later, and the menu would refuse to shut when you pressed the arrow. */
+    if (open && !menu.contains(ev.target) && !trigger.contains(ev.target)) close();
+  }, true);
+  /* Tabbing out closes it. `aria-haspopup` promises a menu and a menu that stayed
+     open behind the reader while they tabbed on into the page would go on covering
+     §00 with six buttons nobody could see the purpose of. `focusout` fires before
+     the new element takes focus, hence the frame. */
+  menu.addEventListener('focusout', () => {
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (open && a !== trigger && !menu.contains(a)) close();
+    });
+  });
+  /* The reader scrolled: the readout under the menu is about to say something
+     else, and a popover anchored to a label that has changed reads as stuck. The
+     grace window is for the scroll the menu ITSELF starts — scrollToEl is smooth,
+     so its events arrive after close() has already run, but a deep-link re-aim or
+     a fling still in flight when the menu opens would otherwise shut it at once. */
+  window.addEventListener('scroll', () => {
+    if (open && performance.now() - opened > 400) close();
+  }, { passive: true });
+
+  return {
+    /** paint the row for the chapter the reader is actually in */
+    mark(id) {
+      items.forEach(b => b.setAttribute('aria-current', String(b.dataset.id === id)));
+    },
+  };
+}
+
 /* ====================================================================== BOOT */
 function boot() {
   splitTitle();
@@ -1357,6 +1512,8 @@ function boot() {
     (awake && !gate.figOff) ? fig.resume() : fig.pause();
   };
 
+  const chapterNav = initChapterNav();
+
   const scroll = initScroll({
     hero: $('#hero'),
     globeWrap: $('#globe-wrap'),
@@ -1375,6 +1532,7 @@ function boot() {
          front of you. See globe.lookAt(). */
       if (id === 'overture') globe.lookAt(46, 14, { hold: 1200, settled: true });
       if (id === 'catalogue') globe.lookAt(62, 17, { hold: 1200, settled: true });
+      chapterNav.mark(id);
     },
     onGlobeDim: (v) => {
       globe.setDim(v);

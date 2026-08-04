@@ -190,7 +190,10 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
       chapterLabel.style.opacity = '0';
       const n = cur.dataset.chapter, t = cur.dataset.title;
       setTimeout(() => {
-        chapterLabel.innerHTML = `<b>${n}</b> / ${t}`;
+        /* the title is in its own span so app.css can drop it below 460px and
+           leave the number — the readout is a jump menu now (see index.html), so
+           it has to survive at a width where the full title never could */
+        chapterLabel.innerHTML = `<b>${n}</b><span class="t">/ ${t}</span>`;
         chapterLabel.style.opacity = '1';
       }, 190);
       onChapter && onChapter(cur.id);

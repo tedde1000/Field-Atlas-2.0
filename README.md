@@ -139,7 +139,7 @@ drift into being two different pages.
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
 | 05 | The Kit | The whole equipment inventory, owned / rental / basic |
 
-### The globe is a shaded-relief sphere, lit over the reader's shoulder
+### The globe is a shaded-relief sphere, lit by the sun that is actually up
 
 `js/earth.js` composes the surface **once, at boot**, out of three equirectangular
 sources and hands `js/globe.js` a single 2048×1024 RGBA plate: elevation gives the
@@ -151,16 +151,21 @@ city lights. `js/globe.js` then shades the disc per pixel — unproject, sample,
 Lambert — and the coastline mask under all of it is filled from the same Natural
 Earth vectors the globe strokes on top, not thresholded out of the imagery.
 
-The sun is **locked to the camera**, offset up and to the left. Session 4 made it
-the real subsolar point in world space and this reverses that on purpose: the drift
-and the per-entry look-ats spend most of their time over Europe at European
-evening, so the venue the page was talking about was frequently on the unlit side.
-It is still a real Lambert term against a real terminator — just one the camera
-carries with it. Four fifths of the visible face is lit at any angle
-(`data-sun-lit`), and the shadowed crescent at the lower-right limb is where the
-city lights show.
+The sun is **the real one, at the reader's clock** — the subsolar point for
+`Date.now()`, fixed in world space, so the terminator lies where the Earth's
+actually does and Scandinavia is dark at three in the morning. This is the third
+position the file has held: session 4 made it real, session 6 locked it to the
+camera because the venue the page was talking about kept landing on the unlit side,
+session 8 reversed that back on instruction — *"it would be cool if it was live
+time, where the sun is shining on the globe."* What makes it survivable this time
+is the city-lights channel, which arrived with the relief plate in between: a venue
+in shadow sits in the middle of the brightest lit landmass on Earth rather than in
+a void, the pins draw over the surface at full opacity regardless, and the night
+floor is a little higher than it was. `data-sun-lat`/`-lon` publish where the sun
+stands and do not move with the camera; `data-sun-lit` is the lit fraction of the
+visible face and does.
 
-Five things about it are load-bearing:
+Seven things about it are load-bearing:
 
 - **All three sources must stay same-origin.** The bake reads each back with
   `getImageData`, and a cross-origin or `file://` image taints the canvas, which
@@ -180,12 +185,44 @@ Five things about it are load-bearing:
   on Earth and rendered a completely dark terminator.
 - **The unprojection does not depend on the camera's longitude**, and that is what
   lets the disc be sharp at all. `λ₀` appears once, as a term added at the end; the
-  rest — and the Lambert term, the fresnel, the coverage alpha — is a function of
-  the pixel and the camera *latitude*, which only moves on a look-at. So the
-  per-pixel geometry is cached and the per-frame loop is a texel offset, a bilinear
-  fetch and a multiply. That halved the cost (13.2 → 9.7 ms at the old size) and is
-  the only reason the raster could be raised from 420 to **700** without blowing
-  the 30 Hz budget: the uncached pass at 640 measured 36 ms.
+  rest — the surface normal, the fresnel, the coverage alpha, the sampling
+  footprint — is a function of the pixel and the camera *latitude*, which only moves
+  on a look-at. So the per-pixel geometry is cached and the per-frame loop is a
+  texel offset, a fetch and a multiply. That halved the cost (13.2 → 9.7 ms at the
+  old size) and is the only reason the raster could be raised from 420 to **700**
+  without blowing the 30 Hz budget: the uncached pass at 640 measured 36 ms.
+- ★ **A world-fixed sun does depend on it, and that is the one thing that cache
+  could not absorb.** The naive version of a live terminator rebuilds an `asin` and
+  an `atan2` per pixel every frame, sixty times a second, on a globe whose idle
+  motion *is* longitude. So the cache holds the **normal** instead of the shading —
+  `nx`/`ny`/`nz` as Int16 at 1/30 000, which is the same three arrays at half the
+  width — and the sun is rotated into camera space once per frame. What is left per
+  pixel is a three-term dot product and three reads from a 1 024-entry table, about
+  a fifth of what one plate fetch costs. A theme change no longer discards the
+  geometry either: the theme is only in the table now.
+- ★ **The plate is band-limited by latitude at bake time.** Theodor: *"you can see a
+  bit of artifacting, a bit of stuff moving on islands and on the land."* An
+  equirectangular plate spends the same 2 048 texels on every parallel, but a
+  parallel at 70°N is a third the length of the equator — so the plate carries three
+  times the detail per kilometre there, and the raster reads 1.9 texels per pixel
+  where it reads 0.64 at the equator. Past Nyquist, bilinear filtering cannot help:
+  *which* detail the raster lands on changes as the planet turns, and Svalbard, the
+  Canadian archipelago and the whole Siberian coast shimmer. Every row is low-passed
+  along its own length to `sec(φ)` texels — two fractional box passes, so the
+  stopband is a triangle's rather than a box's — which throws away nothing anyone
+  could have seen and costs nothing at 30 Hz. The unsharp mask on the elevation got
+  a threshold in the same pass, so it stops amplifying the JPEG's block ringing into
+  texel-scale speckle across Tibet and the ice sheets.
+- ★ **And by footprint at draw time, which is the half the bake cannot reach.** Near
+  the limb an orthographic sphere is edge-on, so a pixel a tenth of a radius from
+  the silhouette covers about three times the ground one at the centre does. That
+  compression is a property of the *camera*, so it is measured per pixel from the
+  analytic derivatives of the unprojection, per axis — radial compression is almost
+  all longitude at the left and right limb and almost all latitude at the top and
+  bottom, and one isotropic figure would blur each across the axis that was still
+  well sampled. Where the excess is under half a texel, which is 83% of the disc,
+  nothing changes and nothing is paid; above it the same four taps spread to the
+  width the pixel is actually responsible for.
 - **It is rastered and scaled** — 340 while the camera's latitude is easing, 200
   while the disc is dimmed behind the scrim — and its limb carries a sub-texel
   coverage alpha, drawn *outside* the arc clip, because canvas `clip()` is not
@@ -500,7 +537,7 @@ FA2_PUPPETEER=…   puppeteer-core's ESM entry (resolved from node_modules if pr
 FA2_BASE=…        where the site is served   (default http://localhost:8766/)
 ```
 
-206 checks in headless Chrome: no page errors, every section renders the right
+226 checks in headless Chrome: no page errors, every section renders the right
 number of things, the numbers on the page equal the numbers in `data/atlas.js`,
 the countdown ticks, both pills work and persist, deep links land, nothing
 overflows sideways at 390 / 768 / 1440 / 1920, the panel routes and traps focus,
@@ -535,8 +572,11 @@ proves they build the same page, including off `file://` — and that the Earth 
 survives the trip as a `data:` URI, which is the one thing in §11 that fails
 silently. §12 covers session 5: that the racing line actually swings across the
 road, that no layout under-numbers its corners without saying so, that no layout
-emits a `NaN` attribute or a numeral outside its frame, and that the sun does not
-turn with the camera.
+emits a `NaN` attribute or a numeral outside its frame, and — §12d — that the sun is
+the real one: its subsolar longitude tracks UTC to inside the equation of time, it
+does *not* move when the camera swings 8°, and the lit fraction of the face does.
+§14 covers session 8: the chapter jump reaches every `section[data-chapter]` in
+document order, survives 360px, and no index bar prints `c/km` again.
 
 One trap worth knowing before you tune a sleep against it: **the idle globe drift is
 frame-rate-limited under headless.** `dt` in `js/globe.js` is clamped to 0.05 s so a
@@ -593,16 +633,20 @@ Writes `trace/shots/*.png` — one per chapter, plus a day-side and two mobile f
   pill appeared not to work. `prefers-reduced-motion` is now the **first-run hint only**;
   after that the stored answer wins. Overriding an accessibility setting by default is a
   real cost, paid on three conditions: the opt-out is one tap, it is in the topbar at
-  every width (the ≤460px block drops the chapter readout rather than this control), and
-  it persists — and on the one cold load where 2.0 overrules a reader who did ask for
-  less motion, the pill wears the accent so the override is visible. The MOTION pill is
-  the single authority: `body.no-motion` is how it is expressed and there is no
-  `@media (prefers-reduced-motion)` block left in `app.css` to disagree with it.
+  every width (the ≤460px block trims the brand's tracking and the chapter title, and
+  keeps every control), and it persists — and on the one cold load where 2.0 overrules
+  a reader who did ask for less motion, the pill wears the accent so the override is
+  visible. The MOTION pill is the single authority: `body.no-motion` is how it is
+  expressed and there is no `@media (prefers-reduced-motion)` block left in `app.css`
+  to disagree with it.
   With motion off the page is fully static and everything is legible — with one
   deliberate exception: the globe's still-frame signature carries the subsolar
-  longitude rounded to the whole degree, so the lighting is allowed to update about
-  fifteen times an hour rather than freezing at whatever it was when MOTION went off.
-  One degree of subsolar longitude is four minutes.
+  longitude to a tenth of a degree, so the lighting is allowed to update about every
+  twenty-four seconds rather than freezing at whatever it was when MOTION went off.
+  A real terminator creeps 15°/hour whether or not anyone is scrolling, and a still
+  globe showing this morning's shadow at midnight is wrong in a way a static page is
+  not. verify.mjs §8's ceiling is two repaints per *second*; this is two and a half a
+  minute.
 - **There is no reticle.** A 34px crosshair used to ease toward a per-chapter
   sightline on its own `rAF` loop, wobbling on two out-of-phase sine waves. Removed
   at Theodor's request — it read as a cursor the reader did not control, and it held

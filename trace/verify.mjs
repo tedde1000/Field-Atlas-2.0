@@ -1436,26 +1436,31 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     '★ no layout emits a NaN attribute, a missing stroke width, or a numeral outside its frame',
     nan.join(' | '));
 
-  /* -- 12d · ★ THE SUN IS LOCKED TO THE CAMERA — THE SAME TWO NUMBERS, THE
-   *            OPPOSITE ASSERTION.
+  /* -- 12d · ★ THE SUN IS THE REAL ONE — THE SAME TWO NUMBERS, THE OPPOSITE
+   *            ASSERTION, FOR THE SECOND TIME.
    *
    * Session 4 made the light a direction in WORLD space at the real subsolar
    * point, and this check proved it by turning the camera and watching the sun
-   * stay put. Session 6 reversed that on Theodor's instruction — "change the
-   * direction the sun comes from, so it's always shining on the side that's
-   * towards me looking at the screen" — because the drift and the per-entry
-   * look-ats spend most of their time over Europe at European evening, and the
-   * venue the page was talking about was frequently on the unlit side.
+   * stay put. Session 6 reversed that, and this check with it, because the venue
+   * the page was talking about kept landing on the unlit side. Session 8 reverses
+   * it back, asked for directly: "it would be cool if it was live time, where the
+   * sun is shining on the globe."
    *
-   * So the invariant flips. `data-sun-lat/lon` still publish the subsolar point,
-   * but it is now the one IMPLIED by a camera-space sun (globe.js sunWorld()), and
-   * it must track the camera one for one. That is the only way to tell "locked to
-   * the camera" from "stuck": a constant would also fail to move with it.
+   * So the invariant flips back, and it is asserted three ways, because none of
+   * them alone distinguishes a real sun from a plausible-looking constant:
    *
-   * And the consequence is asserted directly as well. `data-sun-lit` is the
-   * fraction of the disc radius inside which nothing can be in shadow, so a check
-   * on it is a check that the face the reader is looking at stays readable — which
-   * is the actual request, rather than a proxy for it. */
+   *   1. The published subsolar point agrees with the CLOCK. The sun stands over
+   *      15° of longitude per hour of UTC, and the only thing that may separate it
+   *      from that is the equation of time — which is bounded, by ±16.5 minutes,
+   *      i.e. ±4.13°. That is a textbook identity rather than a restatement of
+   *      globe.js's own arithmetic, so it catches a sign error, an hour offset, a
+   *      frozen clock and a hard-coded direction, all without this file having to
+   *      carry a second solar-position implementation to disagree with the first.
+   *   2. It does NOT follow the camera. Turning the planet 8° must leave it where
+   *      it was, which is the exact assertion session 6 deleted.
+   *   3. But something must move, or "stuck" would pass (2) just as well.
+   *      `data-sun-lit` is the lit fraction of the visible face, so swinging the
+   *      camera across a fixed terminator has to change it. */
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(1200);
   const g0 = await page.evaluate(() => ({ ...document.getElementById('globe').dataset }));
@@ -1498,11 +1503,31 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   ok(Number(g0.rasterCap) === 1024,
     'the surface pass held its frame budget at full resolution',
     `cap=${g0.rasterCap} ms=${g0.surfMs}`);
-  ok(g0.sunLock === 'camera',
-    '★ the light is locked to the camera', `sunLock=${g0.sunLock}`);
-  ok(Number(g0.sunLit) > 0.75,
-    '★ and at least three quarters of the visible face can never be in shadow',
-    `lit inside ${g0.sunLit} of the radius`);
+  ok(g0.sunLock === 'world',
+    '★ the light is fixed in world space, not carried by the camera',
+    `sunLock=${g0.sunLock}`);
+  {
+    /* the page's own clock, read in the page, so a headless browser running under
+       a shifted TZ or a frozen fake timer is compared against itself */
+    const utcH = await page.evaluate(() => {
+      const d = new Date();
+      return d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+    });
+    const mean = -15 * (utcH - 12);                       // where a sundial-free sun would be
+    const off = Math.abs(((Number(g0.sunLon) - mean + 540) % 360) - 180);
+    ok(off <= 4.2,
+      '★ the subsolar longitude tracks UTC to within the equation of time',
+      `utc ${utcH.toFixed(2)}h wants ${mean.toFixed(1)}°, page says ${g0.sunLon}° (off by ${off.toFixed(2)}°)`);
+    const decl = Number(g0.sunLat);
+    ok(Math.abs(decl) <= 23.5,
+      'and the declination is inside the obliquity of the ecliptic', `${decl}°`);
+    /* Northern summer is April→September in any year; the sign of the declination
+       is what tips the terminator, and getting it backwards would light the wrong
+       pole for six months at a time while every other check here still passed. */
+    const m = await page.evaluate(() => new Date().getUTCMonth() + 1);
+    if (m >= 4 && m <= 8) ok(decl > 0, 'and it is a northern-summer sun', `month ${m}, decl ${decl}°`);
+    if (m >= 10 || m <= 2) ok(decl < 0, 'and it is a northern-winter sun', `month ${m}, decl ${decl}°`);
+  }
 
   /* ★ The camera is MOVED, not waited on.
    *
@@ -1523,15 +1548,18 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
   const camMoved = Math.hypot(Number(g1.lon) - Number(g0.lon), Number(g1.lat) - Number(g0.lat));
   const sunMoved = Math.hypot(Number(g1.sunLon) - Number(g0.sunLon), Number(g1.sunLat) - Number(g0.sunLat));
   ok(camMoved > 2, 'the camera actually swung across the window', `${camMoved.toFixed(2)}°`);
-  ok(sunMoved > camMoved * 0.5,
-    '★ the sun turns WITH the camera — the lit face follows the reader',
-    `camera ${camMoved.toFixed(2)}° vs sun ${sunMoved.toFixed(2)}°`);
-  /* ★ Not just "it moved": a sun that happened to drift on its own would pass
-     that. The lit fraction is a fixed property of the direction, so it must be
-     bit-for-bit identical at both ends of a window in which the camera swung 8°.
-     Together the two make "locked" the only explanation. */
-  ok(g1.sunLit === g0.sunLit,
-    'and the lit fraction of the face is unchanged by the swing',
+  /* The real sun moves 0.0042°/s, so across this 2.6 s window it may travel about
+     a hundredth of a degree and no more. A tenth is generous and still an order of
+     magnitude under the smallest camera swing this could be confused with. */
+  ok(sunMoved < 0.1,
+    '★ the sun does NOT turn with the camera — the terminator is where the Earth\'s is',
+    `camera ${camMoved.toFixed(2)}° vs sun ${sunMoved.toFixed(3)}°`);
+  /* ★ Not just "it stayed": a hard-coded direction would pass that too. Swinging
+     the camera 8° across a stationary terminator has to change how much of the
+     visible face is in daylight, and `data-sun-lit` is exactly that fraction.
+     Together the two make "a real sun" the only explanation. */
+  ok(g1.sunLit !== g0.sunLit,
+    'and the lit fraction of the face changed as the camera crossed it',
     `${g0.sunLit} -> ${g1.sunLit}`);
 
   ok(page.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
@@ -1595,17 +1623,26 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
 {
   const globe = readFileSync(path.join(HERE, '..', 'js', 'globe.js'), 'utf8');
   const loop = readFileSync(path.join(HERE, '..', 'js', 'loop.js'), 'utf8');
-  /* ★ REVERSED IN SESSION 6, ON INSTRUCTION. Session 4 replaced a screen-space
-     `SUN = {x,y,z}` with a real subsolar computation, and this asserted the
-     replacement had happened. Session 6 put the light back in camera space —
-     "always shining on the side that's towards me looking at the screen" — so the
-     source-level claim flips with it: there is a SUN direction again, and there is
-     no solar-position code left to drift out of sync with it. §12d asserts the
+  /* ★ REVERSED AGAIN IN SESSION 8, ON INSTRUCTION. Session 4 replaced a
+     screen-space `SUN = {x,y,z}` with a real subsolar computation; session 6 put
+     the constant back; session 8 asked for live time and the constant went for
+     good. The source-level claim follows: there is a subsolar() again and there is
+     no leftover hard-coded direction for it to disagree with. §12d asserts the
      behaviour; this asserts that the two files still say the same thing. */
-  ok(/const SUN = \(\(\) =>/.test(globe) && !/function subsolar/.test(globe),
-    'globe.js carries a camera-space SUN and no leftover solar position');
-  ok(/sunWorld/.test(globe),
-    'and can still report where that light stands over the Earth');
+  ok(/function subsolar/.test(globe) && !/const SUN = \(\(\) =>/.test(globe),
+    'globe.js computes a real subsolar point and keeps no camera-space SUN');
+  ok(/litFraction/.test(globe),
+    'and can still report how much of the visible face that light reaches');
+  /* ★ The two halves of "a bit of stuff moving on islands and on the land". The
+     plate is band-limited by latitude at bake time and the sampling footprint is
+     widened toward the limb at draw time; either one alone leaves half the crawl
+     on the disc, and both are silent failures — the globe still renders, it just
+     shimmers again. Nothing else in the suite can see a texel. */
+  const earth = readFileSync(path.join(HERE, '..', 'js', 'earth.js'), 'utf8');
+  ok(/function polarPrefilter/.test(earth) && /polarPrefilter\(out\)/.test(earth),
+    'earth.js band-limits the plate by latitude, and actually runs it');
+  ok(/FOOTPRINT/.test(globe) && /geo\.fx = new Int16Array/.test(globe),
+    'and globe.js widens the sampling footprint toward the limb');
   ok(/racingLine/.test(loop) && /minimum curvature/i.test(loop),
     'loop.js still documents how the racing line is solved');
   const css = readFileSync(path.join(HERE, '..', 'assets', 'app.css'), 'utf8');
@@ -1841,6 +1878,159 @@ console.log('\n13 · session 7 — the globe, the spin, and §03 in three dimens
     'and there is no transform transition left to disagree with it');
   ok(/offsetWidth/.test(circuit) && /getBoundingClientRect/.test(circuit),
     'the figure measures its layout box, not its transformed one');
+}
+
+/* ============================================================== 14 · SESSION 8
+ * Two more things Theodor reported. The sun and the plate are checked in §12d and
+ * §12e above, where the rest of the globe already lives.
+ *
+ *   "it's a lot of scrolling on this website — maybe it's good with a main page
+ *    where all the chapters are"                          -> 14a
+ *   "13.1 c/km — like, what is that? Ten corners, or what is that?"  -> 14b
+ * ========================================================================= */
+console.log('\n14 · session 8 — getting out of the scroll, and saying what a number is');
+
+/* -- 14a · ★ THE CHAPTER READOUT OPENS, AND IT REACHES EVERY CHAPTER --------
+ *
+ * The list is built from `section[data-chapter]`, so the check that matters is not
+ * "there are six rows" — it is that the rows ARE the sections, in order, with
+ * nothing dropped. A menu that silently lost §04 would look perfectly fine. */
+{
+  const q = await open('', 1280, 900);
+  const shape = await q.evaluate(() => {
+    const t = document.getElementById('chapter-jump');
+    const m = document.getElementById('chapter-menu');
+    return {
+      expanded: t?.getAttribute('aria-expanded'),
+      hidden: m?.hidden,
+      rows: [...m.querySelectorAll('button')].map(b => b.dataset.id),
+      sections: [...document.querySelectorAll('section[data-chapter]')].map(s => s.id),
+    };
+  });
+  ok(shape.expanded === 'false' && shape.hidden === true,
+    'the chapter menu starts closed', `expanded=${shape.expanded} hidden=${shape.hidden}`);
+  ok(shape.rows.length === shape.sections.length && shape.rows.every((r, i) => r === shape.sections[i]),
+    '★ every chapter in the document is in the menu, in document order',
+    `menu ${shape.rows.join(',')} vs page ${shape.sections.join(',')}`);
+
+  await q.click('#chapter-jump');
+  await sleep(320);
+  const opened = await q.evaluate(() => ({
+    expanded: document.getElementById('chapter-jump').getAttribute('aria-expanded'),
+    shown: !document.getElementById('chapter-menu').hidden,
+    // it has to be ON SCREEN, not merely un-hidden: it hangs out of a fixed bar
+    box: document.getElementById('chapter-menu').getBoundingClientRect().toJSON(),
+  }));
+  ok(opened.expanded === 'true' && opened.shown,
+    'clicking it opens the menu', `expanded=${opened.expanded}`);
+  ok(opened.box.width > 100 && opened.box.height > 100 &&
+     opened.box.left >= 0 && opened.box.right <= 1280,
+    'and the menu is inside the viewport',
+    `${JSON.stringify(opened.box)}`);
+
+  /* the actual promise: from the top of the page, one click reaches §05 — which
+     is the bottom of the longest scroll on the site */
+  await q.evaluate(() => document.querySelector('#chapter-menu button[data-id="kit"]').click());
+  await sleep(1400);
+  const landed = await q.evaluate(() => {
+    const r = document.getElementById('kit').getBoundingClientRect();
+    return { top: r.top, closed: document.getElementById('chapter-menu').hidden,
+             expanded: document.getElementById('chapter-jump').getAttribute('aria-expanded') };
+  });
+  ok(Math.abs(landed.top - 62) < 60,
+    '★ and one click from the top of the page lands on §05 THE KIT',
+    `section top at ${landed.top.toFixed(0)}px`);
+  ok(landed.closed && landed.expanded === 'false',
+    'and the menu closes behind it', `hidden=${landed.closed} expanded=${landed.expanded}`);
+
+  await q.click('#chapter-jump');
+  await sleep(300);
+  await q.keyboard.press('Escape');
+  await sleep(320);
+  const escaped = await q.evaluate(() => ({
+    hidden: document.getElementById('chapter-menu').hidden,
+    focused: document.activeElement?.id,
+  }));
+  ok(escaped.hidden === true && escaped.focused === 'chapter-jump',
+    'Escape closes it and hands focus back to the trigger',
+    `hidden=${escaped.hidden} focus=${escaped.focused}`);
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'the chapter menu raises no page errors', q.__errs.join(' | '));
+  await q.close();
+}
+
+/* -- 14a′ · ★ AND IT SURVIVES THE PHONE, WHICH IS THE WHOLE POINT.
+ *
+ * app.css used to hide `.chapter` below 460px, on the reasoning that it was a
+ * read-only label. It is navigation now, and a phone is where the scroll is
+ * longest — so the width that used to delete it is exactly the width this has to
+ * assert. Checked as the computed box, because what a media query resolves to is
+ * the thing that was wrong last time. */
+{
+  const q = await open('', 360, 780);
+  const nav = await q.evaluate(() => {
+    const t = document.getElementById('chapter-jump');
+    const r = t.getBoundingClientRect();
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const pills = [...document.querySelectorAll('.pill')].map(p => p.getBoundingClientRect().toJSON());
+    return { w: r.width, h: r.height, right: r.right, barW: bar.width,
+             pillsFit: pills.every(p => p.left >= 0 && p.right <= bar.width + 0.5),
+             overflow: document.documentElement.scrollWidth };
+  });
+  ok(nav.w > 8 && nav.h > 8,
+    '★ the chapter jump is still reachable at 360px', `${nav.w.toFixed(0)}x${nav.h.toFixed(0)}`);
+  ok(nav.pillsFit && nav.overflow <= 361,
+    'and KIT, MOTION and NIGHT SIDE still fit in the bar beside it',
+    `scrollWidth=${nav.overflow}`);
+  await q.click('#chapter-jump');
+  await sleep(320);
+  const box = await q.evaluate(() =>
+    document.getElementById('chapter-menu').getBoundingClientRect().toJSON());
+  ok(box.left >= -0.5 && box.right <= 360.5,
+    'and the menu it opens does not hang off the screen', JSON.stringify(box));
+  await q.close();
+}
+
+/* -- 14b · ★ NO BAR PRINTS A UNIT THE READER HAS TO DECODE ------------------
+ *
+ * `13.1 c/km` was corners per kilometre and there was nothing anywhere that said
+ * so. This is the one place the suite reads rendered copy, so it is written as a
+ * NEGATIVE assertion about the two abbreviations that were actually unreadable
+ * rather than a positive one about wording — the units can be reworded freely and
+ * only a relapse fails it.
+ *
+ * ★ The first draft of this check was `every unit is at least three characters`
+ * and it failed on `m`. It was right to. Metres are not an abbreviation anyone has
+ * to decode, and a rule that cannot tell `m` from `c/km` is measuring length
+ * rather than the thing that was wrong. See bars() in js/main.js. */
+{
+  const q = await open('', 1280, 900);
+  const units = await q.evaluate(() =>
+    [...document.querySelectorAll('.bar .v u')].map(u => u.textContent.trim()));
+  ok(units.length > 0, 'the date bars rendered at all', `${units.length} bars`);
+  const cryptic = [...new Set(units.filter(u => /^(c\s*\/\s*km|d)$/i.test(u)))];
+  ok(cryptic.length === 0,
+    '★ no index bar prints `c/km` or a bare `d` again',
+    `still abbreviated: ${cryptic.join(', ')}`);
+  ok(units.some(u => /corner/i.test(u)),
+    'and the corner-density bar says what its numerator counts',
+    `units: ${[...new Set(units)].join(', ')}`);
+  /* and the bar itself must survive the extra width — the value column is `auto`,
+     so a unit that got too long would take the track rather than wrap */
+  const tracks = await q.evaluate(() =>
+    [...document.querySelectorAll('.bar .track')].map(t => t.getBoundingClientRect().width));
+  ok(Math.min(...tracks) > 40,
+    'and the bar beside it is still a bar', `narrowest track ${Math.min(...tracks).toFixed(0)}px`);
+  await q.close();
+}
+{
+  const q = await open('', 360, 780);
+  const tracks = await q.evaluate(() =>
+    [...document.querySelectorAll('.bar .track')].map(t => t.getBoundingClientRect().width));
+  ok(tracks.length > 0 && Math.min(...tracks) > 30,
+    'the index bars still measure something at 360px',
+    `narrowest track ${Math.min(...tracks).toFixed(0)}px`);
+  await q.close();
 }
 
 await browser.close();

@@ -37,7 +37,7 @@
 <link rel="stylesheet" href="assets/fonts.css?v=95d09e90">
 
 <link rel="stylesheet" href="assets/tokens.css?v=202054ef">
-<link rel="stylesheet" href="assets/app.css?v=a28ab668">
+<link rel="stylesheet" href="assets/app.css?v=a94bd438">
 </head>
 <body>
 
@@ -75,7 +75,30 @@
     </svg>
     <span>FIELD ATLAS</span>
   </a>
-  <div class="chapter mono"><i></i><span id="chapter-label"><b>00</b> / OVERTURE</span><i></i></div>
+  <!-- ★ THE CHAPTER READOUT IS NAVIGATION NOW, NOT A LABEL.
+       Theodor: "it's a lot of scrolling on this website — the kit itself I can
+       just press at the top right. Maybe it's good with a main page where all the
+       chapters are." The page is one long scroll by design and it should stay
+       one; what it was missing is a way to LEAVE the middle of it. This is the
+       same move KIT already made, applied to the one element that was already
+       reporting which chapter you are in — so it names where you are and now also
+       takes you anywhere else, and the bar grows nothing.
+       The list is built from `section[data-chapter]` by js/main.js, so adding a
+       chapter to this file adds it to the menu and there is no second copy of the
+       running order to keep in step. -->
+  <div class="chapter mono">
+    <i></i>
+    <button class="chapter-jump" id="chapter-jump" type="button"
+            aria-haspopup="true" aria-expanded="false" aria-controls="chapter-menu">
+      <span id="chapter-label"><b>00</b><span class="t">/ OVERTURE</span></span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+        <path d="m6.75 9.75 5.25 4.75 5.25-4.75"></path>
+      </svg>
+    </button>
+    <i></i>
+    <div class="chapter-menu" id="chapter-menu" role="menu" hidden
+         aria-labelledby="chapter-jump"></div>
+  </div>
   <div class="pills">
     <!-- KIT is the only navigation on the page. §05 THE KIT sits at the very
          bottom of a very long scroll, so on a phone "what am I packing" used to
@@ -279,6 +302,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=b60cda95"></script>
+<script type="module" src="js/main.js?v=23d44390"></script>
 </body>
 </html>
