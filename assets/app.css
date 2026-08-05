@@ -89,15 +89,65 @@ a { color: inherit; }
    "the light shape around the globe is a bit squarish" was. The box is 14%
    bigger than the disc it holds so the halo has somewhere to go, and `right` is
    pulled back by the same 6vmin the box grew on that side, so the planet sits
-   where it always did. Change one of these and change all three breakpoints. */
-#globe-wrap {
-  position: fixed; z-index: 1; pointer-events: none;
+   where it always did. Change one of these and change all three breakpoints.
+   ★ #globe-hit shares every one of them. It is the invisible box that takes the
+   reader's pointers (see below), and it is only correct while it lies exactly
+   over the disc — so the geometry is written ONCE, here and at each breakpoint,
+   for both. Never give one of them a width the other does not have. */
+#globe-wrap, #globe-hit {
+  position: fixed;
   top: 50%; right: -25vmin;
   width: 100vmin; height: 100vmin;
   transform: translateY(-50%);
-  will-change: transform, opacity;
 }
+#globe-wrap { z-index: 1; pointer-events: none; will-change: transform, opacity; }
 #globe { width: 100%; height: 100%; display: block; transition: opacity .5s var(--ease); }
+
+/* ★ THE PINS WERE NEVER CLICKABLE, AND IT TOOK TWO FIXES, NOT ONE.
+ *
+ * js/main.js has carried a `click` and a `pointermove` handler on the globe since
+ * session 2, and has always toggled `body.globe-hot` when the disc is the hero's
+ * subject — with a comment explaining that it must stay inert below the hero or a
+ * fixed layer would swallow clicks meant for §02's entries and §04's cells. All of
+ * that was right and none of it ever ran. Two silent failures, stacked:
+ *
+ *   1. No rule ever consumed `globe-hot`, so `pointer-events: none` on #globe-wrap
+ *      inherited straight through to the canvas.
+ *   2. `main` is `position: relative; z-index: 3` — above BOTH the globe and the
+ *      scrim — so with pointer events switched on, every one of them still landed
+ *      on `#hero`.
+ *
+ * Neither throws, neither logs, and the cursor never even changed.
+ *
+ * ★ AND THE OBVIOUS FIX FOR (2) IS WRONG. Lifting #globe-wrap over `main` also
+ * lifts it over #scrim, and #scrim is the gradient that pours the page colour back
+ * across the type. Tried, rendered, looked at: a full-brightness planet directly
+ * behind the hero copy on a phone. The disc must be PAINTED under the scrim and
+ * HIT above the page, and one element cannot be on both sides of the same layer.
+ *
+ * So #globe-hit is a second, empty box in exactly the same place — see the note
+ * beside it in index.html. Paint order is unchanged; only the hit order moves.
+ *
+ * ★ `touch-action: pan-y` is what keeps the page. The browser keeps every vertical
+ * drag, which matters most on a phone, where the disc lies under the hero copy and
+ * a reader flicking upward is scrolling rather than turning the Earth. What is
+ * left for js/main.js is the horizontal drag, the two-finger pinch and the tap.
+ * Same bargain §03's stage strikes with `data-wheel="modifier"`.
+ *
+ * ★ CLIPPED TO THE DISC, so the box costs the hero almost nothing. It is a SQUARE
+ * around a circular planet, and its corners would otherwise take every click and
+ * every text selection in a fifth of the hero for nothing. `clip-path` hit-tests
+ * as well as it paints, so those corners hand their events straight back. 50% of a
+ * square box is where HALO puts the outer edge of the atmosphere. Zoomed in the
+ * sphere fills the box and the clip goes with it — by then the reader is holding
+ * the globe on purpose, and RESET VIEW is on screen to let go of it. */
+#globe-hit { z-index: 5; pointer-events: none; }
+body.globe-hot #globe-hit {
+  pointer-events: auto; touch-action: pan-y;
+  clip-path: circle(50% at 50% 50%);
+}
+body.globe-hot.globe-zoomed #globe-hit { clip-path: none; }
+body.globe-hot.globe-turning #globe-hit { cursor: grabbing; }
 /* day side puts a bright ocean straight behind the body copy — hold it back */
 :root[data-theme='day'] #globe { opacity: .34; }
 
@@ -221,6 +271,54 @@ body.no-motion .chapter-menu { transition: none; }
 .pill--go::before { display: none; }
 .pill--go:hover { border-color: var(--accent); color: var(--accent-text); }
 .pill--go svg { width: 12px; height: 12px; flex: none; }
+
+/* ============================================ the globe's own chrome
+ * Anchored to the VIEWPORT, not to #globe-wrap — that box is deliberately hung
+ * off the right edge so the disc can sit half off-screen, and anything parented
+ * to it would go over the edge with it. Sits inside the right rail on a wide
+ * page, where the rail's own type is the only other thing at that margin.
+ * Only present while the disc is the hero's subject, which is the same condition
+ * that makes it interactive at all — see `body.globe-hot` above. */
+#globe-ui {
+  /* ★ 6, ABOVE #globe-hit. At 3 this sat under the hit layer, and zoomed in —
+     where the clip is dropped and the box covers its own bottom-right corner,
+     which is exactly where this is — RESET VIEW was drawn, was hit-testable to
+     puppeteer, and did nothing: every click on it went to the globe underneath
+     and was read as a tap. Caught by the suite, not by looking at it. */
+  position: fixed; z-index: 6;
+  right: calc(var(--rail-w) + 16px); bottom: 16px;
+  display: flex; align-items: center; gap: 12px;
+  opacity: 0; pointer-events: none;
+  transition: opacity .45s var(--ease);
+}
+body.globe-hot #globe-ui { opacity: 1; }
+#globe-hint {
+  font-size: 8.5px; letter-spacing: .2em; color: var(--ink-4);
+  text-transform: uppercase; white-space: nowrap;
+}
+#globe-hint[hidden] { display: none; }
+#globe-reset {
+  display: none;                      /* and therefore out of the tab order */
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--hairline); background: var(--chrome); color: var(--ink-2);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  font-size: 8.5px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+  cursor: pointer; pointer-events: auto;
+  transition: border-color .25s, color .25s;
+}
+/* --ink, not --accent-text: that token is named by .pill--go above and is not
+   defined in tokens.css, so it resolves to nothing and the declaration is dropped.
+   Pre-existing and only a hover colour, but not worth copying into a new rule. */
+#globe-reset:hover { border-color: var(--accent); color: var(--ink); }
+body.globe-zoomed #globe-reset { display: inline-flex; }
+/* while a finger is on the disc the hint is in the way of the thing it describes */
+body.globe-turning #globe-hint { opacity: .25; }
+@media (max-width: 760px) {
+  /* the rails are gone at this width, so the margin comes back to the edge, and
+     the hero's own "— DESCEND THE CATALOGUE" sits low on the left: keep clear */
+  #globe-ui { right: 14px; bottom: 12px; gap: 9px; }
+  #globe-hint { font-size: 8px; letter-spacing: .14em; }
+}
 
 /* the two vertical rails */
 .rail {
@@ -1291,7 +1389,7 @@ body.no-motion .entry-open:hover svg { transform: none; }
 @media (max-width: 1080px) {
   .entry, .mandate-grid { grid-template-columns: minmax(0, 1fr); }
   .mandate-h { max-width: none; }
-  #globe-wrap { width: 100vmin; height: 100vmin; right: -40vmin; }
+  #globe-wrap, #globe-hit { width: 100vmin; height: 100vmin; right: -40vmin; }
   /* ★ RAISED — see the note at the ≤460px block below, which is the one Theodor
      was actually looking at. Same reasoning, one step less of it, because the
      scrim here is still the horizontal wipe and already carries the left of the
@@ -1319,7 +1417,7 @@ body.no-motion .entry-open:hover svg { transform: none; }
   /* the toggles collapse to their state dot; the way to the kit does not */
   .pill--go span { display: inline; }
   .hero-mark { display: none; }
-  #globe-wrap { width: 141vmin; height: 141vmin; right: -60.5vmin; top: 40%; }
+  #globe-wrap, #globe-hit { width: 141vmin; height: 141vmin; right: -60.5vmin; top: 40%; }
   /* ★ THE PHONE HELD THE EARTH AT A THIRD, AND THAT IS WHAT "MAKE IT BRIGHTER"
      WAS ABOUT.
        Theodor, on the phone hero: "make the Earth a bit brighter." Nothing in

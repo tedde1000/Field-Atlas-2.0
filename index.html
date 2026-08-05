@@ -37,7 +37,7 @@
 <link rel="stylesheet" href="assets/fonts.css?v=95d09e90">
 
 <link rel="stylesheet" href="assets/tokens.css?v=202054ef">
-<link rel="stylesheet" href="assets/app.css?v=a94bd438">
+<link rel="stylesheet" href="assets/app.css?v=2a5b4e3b">
 </head>
 <body>
 
@@ -47,6 +47,17 @@
 <div id="sky" aria-hidden="true"><canvas id="stars"></canvas></div>
 <div id="globe-wrap" aria-hidden="true"><canvas id="globe"></canvas></div>
 <div id="scrim" aria-hidden="true"></div>
+<!-- ★ THE GLOBE IS TOUCHED HERE, NOT ON THE CANVAS, and the two cannot be the
+     same element. The disc has to be PAINTED under #scrim — that gradient is what
+     pours the page colour back over the type so the hero stays readable — and it
+     has to be HIT ABOVE `main`, which is `z-index: 3`, or every press lands on
+     §00's copy instead. One element cannot be on both sides of the same layer, and
+     trying it put a full-brightness planet behind the hero on a phone.
+     So this is the same box, empty and invisible, sitting above the page: it takes
+     the pointers and hands them to js/main.js, which turns and zooms the canvas
+     below. Its geometry is shared with #globe-wrap in one rule in app.css, so the
+     two cannot drift apart across the three breakpoints. -->
+<div id="globe-hit" aria-hidden="true"></div>
 
 <!-- ★ THE EARTH, IN THREE EQUIRECTANGULAR SOURCES. js/earth.js reads all three
      back with getImageData at boot and bakes them into ONE 2048x1024 plate that
@@ -118,6 +129,26 @@
     <button class="pill" id="pill-theme" type="button" aria-pressed="true"><span>NIGHT SIDE</span></button>
   </div>
 </header>
+
+<!-- ★ THE GLOBE'S OWN CHROME, and the hint is not decoration.
+     A canvas cannot advertise itself: nobody pinches what looks like a background
+     image, so without a line of type saying so the turning and the zooming would
+     exist and never be found. It names whichever gesture this device can actually
+     do — js/main.js fills it from `(pointer: coarse)` — and it retires for good
+     the first time the reader zooms, because after that it is only clutter.
+     RESET VIEW shows up only when there is something to reset. Both live outside
+     #globe-wrap: that box is hung off the right edge of the viewport so the disc
+     can sit half off-screen, and anything anchored inside it would go with it.
+
+     ★ The HINT is aria-hidden and the BUTTON is not. The hint describes a gesture
+     that only exists for a pointer, so reading it out to someone who has no
+     pointer is noise; the button is a real control and is display:none until
+     there is a zoom to undo, which keeps it out of the tab order until it means
+     something without any aria bookkeeping to get wrong. -->
+<div id="globe-ui">
+  <span class="mono" id="globe-hint" aria-hidden="true"></span>
+  <button class="mono" id="globe-reset" type="button">RESET VIEW</button>
+</div>
 
 <div class="rail rail--l" aria-hidden="true"><span id="rail-left">TEDDEPICS · NORDIC CIRCUIT · SEASON 2026</span></div>
 <div class="rail rail--r" aria-hidden="true"><span id="rail-right">UTC —</span></div>
@@ -302,6 +333,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=23d44390"></script>
+<script type="module" src="js/main.js?v=d0c64e77"></script>
 </body>
 </html>

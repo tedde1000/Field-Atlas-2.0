@@ -227,6 +227,24 @@ const angleDelta = (a, b) => ((b - a + 540) % 360) - 180;
  * well above the 0.9°/s idle drift, so idling is untouched. */
 const MAX_TURN = 34;
 
+/* ★ HOW FAR IN THE READER MAY GO, and why it stops there.
+ *
+ * Theodor: "if I have my thumb on the globe I could zoom in on it, just to get
+ * closer to Sweden and where all the tracks are, and then press them."
+ *
+ * That is the whole brief and it sets the ceiling by itself. The eight dates sit
+ * inside about eight degrees of latitude, which at the hero's radius is 55 px —
+ * so at 1x the pins overlap inside one 16 px hit radius and "press them" is not a
+ * thing anyone can do reliably. At 4x that spread is 220 px and every circuit is
+ * its own target, which is the point at which the feature has done its job.
+ *
+ * Past 4x the limit stops being the pins and starts being the PLATE: 2 048 texels
+ * around the equator is 1 024 across the visible hemisphere, and the raster is
+ * capped at the same figure (see RASTER_MAX), so beyond about 2x the disc is
+ * magnifying a fixed number of texels however big it gets. 4.2x is where that is
+ * still an honest picture of Scandinavia rather than a soft one. */
+const ZOOM_MIN = 1, ZOOM_MAX = 4.2;
+
 /* Above this wrapper opacity the globe is the SUBJECT; below it, it is a backdrop
    behind the chapters. Two things read it — whether the idle drift runs at all,
    and whether a look-at is flown or simply placed — and they have to agree, or the
@@ -337,7 +355,14 @@ export function createGlobe(canvas, opts = {}) {
     running: true, motion: true,
     dim: 1,              // wrapper opacity, fed in by scroll.js
     busy: false,         // the reader is scrolling right now — see frame()
-    w: 0, h: 0, r: 0, cx: 0, cy: 0, dpr: 1,
+    /* ★ `r0` is the disc the LAYOUT gives us and `r` is the disc actually drawn —
+       r0 × zoom. Splitting them this way is what keeps the zoom to a dozen lines:
+       every projection, hit test, ring cull and clip downstream already reads
+       `state.r`, so all of it follows the reader in without being touched. Only
+       the halo layer needs r0, because it is baked once and scaled at blit. */
+    w: 0, h: 0, r0: 0, r: 0, cx: 0, cy: 0, dpr: 1,
+    zoom: 1, tZoom: 1,   // eased, and what it is easing toward
+    gesture: false,      // a finger or a button is down on the disc right now
   };
 
   /* camera trig, recomputed once per frame rather than once per point */
@@ -397,7 +422,8 @@ export function createGlobe(canvas, opts = {}) {
     state.cy = state.h / 2;
     // divide by HALO, do not subtract a margin: the atmosphere has to fit INSIDE
     // the canvas or it gets clipped to the canvas rectangle. See HALO above.
-    state.r = (Math.min(state.w, state.h) / 2 - 2) / HALO;
+    state.r0 = (Math.min(state.w, state.h) / 2 - 2) / HALO;
+    state.r = state.r0 * state.zoom;
     layers.dirty = true;
     /* a different disc is a different sum — re-try from the top of the ladder */
     cost.rung = 0; cost.over = 0; cost.ms = 0;
@@ -426,7 +452,13 @@ export function createGlobe(canvas, opts = {}) {
   }
 
   function buildLayers(isDay) {
-    const { cx, cy, r } = state;
+    /* ★ r0, NOT r. This is the one thing on the canvas that is not re-derived per
+       frame — a full-disc radial gradient evaluated per pixel — so it is baked at
+       the UNZOOMED radius and blitted back scaled in paint(). The gradient is
+       radially symmetric about the centre the zoom scales about, so a scaled blit
+       is the same image the rebuild would have produced, for the price of a memcpy
+       instead of a million gradient stops per pinch frame. */
+    const { cx, cy, r0: r } = state;
 
     const b = makeLayer();
     const halo = b.g.createRadialGradient(cx, cy, r * 0.965, cx, cy, r * HALO);
@@ -506,8 +538,22 @@ export function createGlobe(canvas, opts = {}) {
        a texel there — so it rasters at 200px and the per-pixel cost drops by two
        thirds exactly where it is least worth paying. Above that it is the subject,
        unless the camera's latitude is still easing — see RASTER_MOVING. */
-    const cap = state.dim < 0.35 ? 200
-      : (Math.abs(state.tLat - state.lat) > 0.04 ? RASTER_MOVING : rasterCeiling());
+    if (state.dim < 0.35) return Math.min(200, Math.max(16, Math.round(state.r * 2 * state.dpr)));
+    /* ★ A DRAG COUNTS AS MOVING, and the existing test cannot see one. It reads
+       `tLat - lat`, which is the gap an EASE has left to close — and a drag closes
+       that gap itself every frame, by setting both (see turnBy: direct
+       manipulation, no lag between the finger and the planet). So a hand-turned
+       globe looked stationary to this function, took the full raster, and rebuilt
+       the whole geometry cache — an asin and an atan2 a pixel over 800 000 pixels
+       — inside every frame of the drag. That is the one place on this canvas where
+       a stall is unmissable, because the reader is holding the thing that stalls.
+       Zoomed in, the moving raster is allowed to grow with √zoom: the cost of
+       buildGeo goes as R² so the square root buys real sharpness for a bounded
+       price, and it is capped where that price stops being payable at 30 Hz. */
+    const moving = state.gesture || Math.abs(state.tLat - state.lat) > 0.04;
+    const cap = moving
+      ? Math.min(620, Math.round(RASTER_MOVING * Math.sqrt(state.zoom)))
+      : rasterCeiling();
     return Math.min(cap, Math.max(16, Math.round(state.r * 2 * state.dpr)));
   }
 
@@ -792,6 +838,16 @@ export function createGlobe(canvas, opts = {}) {
     /* ★ The 1/30 000 that turns the packed Int16 normal back into a unit vector is
        folded into the sun here, once, rather than into three multiplies a pixel. */
     const sux = sun.x * INV_N16, suy = sun.y * INV_N16, suz = sun.z * INV_N16;
+    /* ★ THE CITY LIGHTS DIM AS THE READER LEANS IN, and that is not a fudge — it
+       is the only honest answer available to a glow that is baked at a fixed size
+       in TEXELS. Magnify the plate and every light magnifies with it, so a night
+       side that reads as points at 1x reads as fog at 4x, over exactly the ground
+       the reader zoomed in to look at. Their apparent area goes as zoom², so
+       holding the total light constant would want 1/zoom² and would extinguish
+       them; zoom^-0.75 keeps them plainly lit while handing the terrain back.
+       Folded into the three channel constants, so it costs nothing per pixel. */
+    const lampZ = Math.pow(state.zoom, -0.75);
+    const nR = 255 * lampZ, nG = 202 * lampZ, nB = 128 * lampZ;
 
     if (!px) {
       // the plate has not baked yet, or could not be read — a plain ocean, so the
@@ -869,11 +925,11 @@ export function createGlobe(canvas, opts = {}) {
       const d = ((i & 7) - 3.5) * 0.30;
 
       out[o] = (px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11) * s +
-               120 * g + night * 255 + d;
+               120 * g + night * nR + d;
       out[o + 1] = (px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11) * s +
-                   172 * g + night * 202 + d;
+                   172 * g + night * nG + d;
       out[o + 2] = (px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11) * s +
-                   214 * g + night * 128 + d;
+                   214 * g + night * nB + d;
       out[o + 3] = al[i];
     }
 
@@ -888,6 +944,20 @@ export function createGlobe(canvas, opts = {}) {
     const p = lat * RAD, l = lon * RAD;
     const cl = Math.cos(p);
     return projectVec(cl * Math.sin(l), cl * Math.cos(l), Math.sin(p));
+  }
+
+  /* The other way: a canvas point back to a place on the sphere, or null if the
+   * point missed the disc. Exactly the unprojection buildGeo() runs per pixel —
+   * see the maths over THE SURFACE PASS — evaluated once for a fingertip.
+   * setCam() first; the api wrapper does it. */
+  function unproject(x, y) {
+    const u = (x - state.cx) / state.r, v = -(y - state.cy) / state.r;
+    const w2 = 1 - u * u - v * v;
+    if (w2 <= 0) return null;                        // outside the limb: empty space
+    const w = Math.sqrt(w2);
+    const lat = Math.asin(Math.max(-1, Math.min(1, w * cam.sLat + v * cam.cLat))) / RAD;
+    const lon = state.lon + Math.atan2(u, w * cam.cLat - v * cam.sLat) / RAD;
+    return { lat, lon: ((lon + 540) % 360) - 180 };
   }
 
   /* The hot one: a packed unit vector, no trigonometry. */
@@ -983,8 +1053,15 @@ export function createGlobe(canvas, opts = {}) {
     // other, twice a minute at most. See the note over `sun`.
     setSun(performance.now());
 
-    // -- the atmosphere ring outside the limb
-    ctx.drawImage(layers.air, 0, 0, w, h);
+    /* -- the atmosphere ring outside the limb, scaled about the centre the zoom
+     *    scales about — see buildLayers(). Skipped outright once its inner edge
+     *    has left the canvas: past about 1.5x there is no ring on screen to draw,
+     *    and a 4x upscale blit of a full-viewport image every frame is not free. */
+    const zoomed = state.zoom;
+    if (state.r0 * zoomed * 0.965 < Math.hypot(w, h) / 2) {
+      if (zoomed === 1) ctx.drawImage(layers.air, 0, 0, w, h);
+      else ctx.drawImage(layers.air, cx - cx * zoomed, cy - cy * zoomed, w * zoomed, h * zoomed);
+    }
 
     /* -- the surface: shaded relief, lit by the sun that is actually up.
      *    Rastered small (see RASTER_MAX) and scaled up here, which is the one
@@ -1124,6 +1201,21 @@ export function createGlobe(canvas, opts = {}) {
     last = now;
     if (!state.running) return;
 
+    /* ★ THE ZOOM EASES OUTSIDE THE MOTION GATE, ON PURPOSE. Everything else in
+       here is decoration the MOTION pill is entitled to switch off — an idle
+       drift, a flown look-at. A zoom is not: it is the reader's own hand, and a
+       control that stops responding because animation is off is a broken control,
+       not a still one. With motion off it snaps instead of easing, which is the
+       same answer the pill gives everywhere else on the page. */
+    if (state.zoom !== state.tZoom) {
+      if (state.motion) {
+        const kz = 1 - Math.pow(0.0006, dt);
+        state.zoom += (state.tZoom - state.zoom) * kz;
+        if (Math.abs(state.tZoom - state.zoom) < 0.002) state.zoom = state.tZoom;
+      } else state.zoom = state.tZoom;
+      state.r = state.r0 * state.zoom;
+    }
+
     if (state.motion) {
       const k = 1 - Math.pow(0.0016, dt);            // frame-rate independent ease
       let dLon = angleDelta(state.lon, state.tLon) * k;
@@ -1185,7 +1277,9 @@ export function createGlobe(canvas, opts = {}) {
       const sig = state.lon.toFixed(2) + '|' + state.lat.toFixed(2) + '|' +
                   state.dim.toFixed(2) + '|' + state.focus + '|' +
                   document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h +
-                  '|' + (PLATE.ready ? 1 : 0) + '|' + subsolar(Date.now()).lon.toFixed(1);
+                  '|' + (PLATE.ready ? 1 : 0) + '|' + subsolar(Date.now()).lon.toFixed(1) +
+                  /* the reader's own zoom, so a pinch with MOTION off still draws */
+                  '|' + state.zoom.toFixed(3);
       if (sig === stillSig && !layers.dirty) return;
       stillSig = sig;
     }
@@ -1227,6 +1321,9 @@ export function createGlobe(canvas, opts = {}) {
     canvas.dataset.lon = state.lon.toFixed(1);
     canvas.dataset.lat = state.lat.toFixed(1);
     canvas.dataset.paints = ++paints;
+    /* the reader's own view, published for the same reason the camera is: it is
+       the only handle a test has on a gesture that happens inside a canvas */
+    canvas.dataset.zoom = state.zoom.toFixed(2);
     canvas.dataset.plate = PLATE.ready ? 'ready' : (PLATE.failed ? 'failed' : 'loading');
     canvas.dataset.plateKind = PLATE.detail || '';
 
@@ -1290,7 +1387,110 @@ export function createGlobe(canvas, opts = {}) {
     },
     focus(id) { state.focus = id; },
     /** the wrapper's current opacity, so the paint budget can follow it */
-    setDim(v) { state.dim = v; },
+    setDim(v) {
+      state.dim = v;
+      /* ★ LEAVING THE HERO PUTS THE ZOOM BACK. Below DRIFT_DIM the disc is a
+         backdrop at 14% behind #scrim and the pointer is off it (see the
+         `globe-hot` rule in app.css), so a reader who zoomed in and scrolled away
+         would have no way to undo it and nothing to undo it FOR — just a fragment
+         of sphere the size of the viewport sitting behind the catalogue. It eases
+         out rather than snapping, because they may only have scrolled a little. */
+      if (v < DRIFT_DIM && state.tZoom !== 1) { state.tZoom = 1; api.onZoom?.(1); }
+    },
+
+    /** set by the page — called whenever the TARGET zoom moves, and not otherwise */
+    onZoom: null,
+
+    /* ================================================= the reader's own hands
+     * Three verbs, driven by js/main.js, which owns the pointers and the wheel.
+     * Split this way because the gesture plumbing — pinch bookkeeping, tap versus
+     * drag, which modifier means zoom — is DOM work that belongs beside the other
+     * listeners, while what a turn or a zoom MEANS is spherical geometry and
+     * belongs here with the projection it has to stay consistent with.
+     * ====================================================================== */
+
+    /** how far in the reader currently is, for the page's own chrome */
+    zoom() { return state.tZoom; },
+
+    /**
+     * Turn the planet under a drag of (dx, dy) canvas pixels.
+     *
+     * Both the camera AND its target are set, which is the whole difference
+     * between dragging a globe and asking one to go somewhere: an eased target
+     * would leave the planet trailing the finger by a tenth of a second, and at
+     * that point the reader is no longer turning it, they are steering it.
+     *
+     * dx is divided by cos(latitude) because a degree of longitude is that much
+     * narrower on the ground up there — without it Scandinavia turns at half the
+     * speed of the equator under the same finger. Floored at 0.4 so the last few
+     * degrees before the pole do not become a slingshot.
+     */
+    turnBy(dx, dy) {
+      const k = 1 / RAD / state.r;
+      state.tLon = state.lon - dx * k / Math.max(0.4, Math.cos(state.lat * RAD));
+      state.tLat = Math.max(-85, Math.min(85, state.lat + dy * k));
+      state.lon = state.tLon; state.lat = state.tLat;
+      state.holdUntil = performance.now() + 2400;   // do not drift out from under them
+    },
+
+    /**
+     * Scale by `k` about the canvas point (x, y), clamped to ZOOM_MIN..ZOOM_MAX.
+     *
+     * ★ IT ALSO WALKS THE CAMERA TOWARD WHATEVER IS UNDER THE FINGERS, and that is
+     * what makes it feel like zooming rather than like magnifying. The disc centre
+     * sits well to the right of the viewport — #globe-wrap is deliberately hung
+     * off the edge — so a zoom purely about that centre would drive whatever the
+     * reader was actually looking at off the screen, fastest at exactly the moment
+     * they leant in. Instead the point they pinched is unprojected to a real
+     * lat/lon and the camera moves a fraction of the way to it: `1 − z0/z1`, which
+     * is nothing for a small nudge and asymptotically all of it as the zoom
+     * builds. Pinch on Sweden and Sweden arrives in the middle.
+     */
+    zoomBy(k, x, y) {
+      const z0 = state.tZoom;
+      const z1 = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z0 * k));
+      if (z1 === z0) return;
+      state.tZoom = z1;
+      if (z1 > z0 && x != null) {
+        setCam();
+        const t = unproject(x, y);
+        if (t) {
+          const f = 1 - z0 / z1;
+          state.tLat = Math.max(-85, Math.min(85, state.tLat + (t.lat - state.tLat) * f));
+          state.tLon += angleDelta(state.tLon, t.lon) * f;
+        }
+      }
+      state.holdUntil = performance.now() + 2400;
+      api.onZoom?.(z1);
+    },
+
+    /** back to the whole planet, without moving where it is pointing */
+    resetView() {
+      state.tZoom = 1;
+      state.holdUntil = performance.now() + 1200;
+      api.onZoom?.(1);
+    },
+
+    /**
+     * A pointer is down on the disc, or is not.
+     *
+     * The raster drops while it is — see surfaceSize(). Held rather than inferred
+     * because a drag sets the camera and its target together, so there is no
+     * easing gap left for the existing "is it moving" test to notice.
+     */
+    setGesture(on) {
+      if (state.gesture === on) return;
+      state.gesture = on;
+      canvas.dataset.gesture = on ? '1' : '0';
+      if (!on) {
+        // a new disc size deserves a fresh run at the ladder — same as resize()
+        cost.rung = 0; cost.over = 0; cost.ms = 0;
+        lastPaint = -1e9;                    // and a sharp frame immediately
+      }
+    },
+
+    /** canvas point to {lat, lon}, or null if it missed the planet */
+    unproject(x, y) { setCam(); return unproject(x, y); },
     /** true while the reader is actively scrolling — see the star in frame() */
     setBusy(v) {
       if (state.busy === v) return;

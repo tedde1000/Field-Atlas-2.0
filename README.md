@@ -41,7 +41,8 @@ assets/earth-topo-4096.jpg          global elevation — the SHAPE of the surfac
 assets/earth-blue-marble-2048.jpg   NASA Blue Marble — the land-cover COLOUR only
 assets/earth-night-2048.png         NASA Earth at Night — the city LIGHTS only
 js/main.js               data -> DOM, the editorial copy, wiring
-js/globe.js              orthographic Earth on a 2D canvas, lit from the camera
+js/globe.js              orthographic Earth on a 2D canvas, lit by the real sun,
+                         turned and zoomed by hand at the hero
 js/earth.js              bakes the three sources into one relief plate, once, at boot
 js/starfield.js          the field behind everything
 js/circuit.js            §03 — particles round a lap-time-solved racing line, on
@@ -252,6 +253,63 @@ Seven things about it are load-bearing:
   exactly why it looked random. It is gated on `dim >= DRIFT_DIM` now, and §02's
   per-entry aim is *placed* rather than flown for the same reason the two chapter
   aims already were: below that threshold there is nothing to animate for.
+
+### The globe is in the reader's hands at the hero
+
+Turn it with a drag, zoom it with a pinch or ctrl-scroll, tap a pin to open that
+circuit. Zoom runs 1×–4.2×, which is set by the pins rather than by taste: the
+eight dates sit inside about eight degrees of latitude, 55 px at the hero radius,
+so at 1× they overlap inside one hit radius and *press them* is not a thing anyone
+can do. At 4× that spread is 220 px and every circuit is its own target.
+
+**The pressing half was written in session 2 and had never once run.** Two silent
+failures were stacked on it, and neither throws, logs, or does anything but
+nothing:
+
+- `body.globe-hot` was toggled on and off correctly, and **no stylesheet rule ever
+  consumed it**, so `pointer-events: none` on `#globe-wrap` inherited straight
+  through to the canvas.
+- `main` is `position: relative; z-index: 3` — above both the globe *and* the
+  scrim — so once pointer events were switched on, every one of them still landed
+  on `#hero`.
+
+And the obvious fix for the second is wrong. Lifting `#globe-wrap` over `main`
+also lifts it over `#scrim`, which is the gradient that pours the page colour back
+across the type: tried, rendered, looked at, and it put a full-brightness planet
+directly behind the hero copy on a phone. The disc must be **painted under** the
+scrim and **hit above** the page, and one element cannot be on both sides of the
+same layer. Hence `#globe-hit` — an empty box sharing `#globe-wrap`'s geometry in
+one rule, at `z-index: 5`, clipped with `clip-path: circle(50%)` so the square's
+empty corners hand their events back to the hero instead of eating a fifth of it.
+
+Four more things are load-bearing:
+
+- **`touch-action: pan-y`, not `none`.** The browser keeps every vertical drag, so
+  a finger anywhere on the disc still scrolls the page — which matters most on a
+  phone, where the disc lies under the hero copy. Same bargain §03's stage strikes
+  with `data-wheel="modifier"`, and the wheel here is held behind ctrl/⌘ for the
+  same reason.
+- **Pointers turn and tap; touch events pinch.** Not a style choice. While
+  `touch-action` still permits the browser a gesture, Chrome hands the page only
+  the *first* touch point as a pointer — measured, a real two-finger spread
+  produced exactly one `pointerdown`. The legacy Touch Events API has no such
+  problem, and `ev.touches` carries both.
+- **Zoom walks the camera toward the pointer.** `#globe-wrap` hangs off the right
+  edge of the viewport, so a zoom purely about the disc centre drives whatever the
+  reader is looking at off screen exactly as they lean in. The point under the
+  fingers is unprojected to a real lat/lon and the camera moves `1 − z₀/z₁` of the
+  way to it — nothing for a nudge, asymptotically all of it as the zoom builds.
+- **A drag counts as *moving* for the raster.** The existing test reads
+  `tLat − lat`, which is the gap an *ease* has left to close, and a drag closes it
+  itself every frame — so a hand-turned globe looked stationary, took the full
+  raster, and rebuilt the whole geometry cache inside every frame of the drag.
+  `setGesture()` is what the surface pass actually watches now.
+
+The city lights also **dim as the reader leans in** (`zoom^-0.75`). The glow is
+baked at a fixed radius in *texels*, so magnifying the plate magnifies every light
+with it: at 4× the night side was forty-pixel clouds of haze over the one ground
+the reader had zoomed in to look at. Their apparent area goes as zoom², so holding
+total light constant would want `1/zoom²` and would extinguish them.
 
 ### §03 solves for lap time, not for geometry
 
@@ -537,7 +595,7 @@ FA2_PUPPETEER=…   puppeteer-core's ESM entry (resolved from node_modules if pr
 FA2_BASE=…        where the site is served   (default http://localhost:8766/)
 ```
 
-226 checks in headless Chrome: no page errors, every section renders the right
+246 checks in headless Chrome: no page errors, every section renders the right
 number of things, the numbers on the page equal the numbers in `data/atlas.js`,
 the countdown ticks, both pills work and persist, deep links land, nothing
 overflows sideways at 390 / 768 / 1440 / 1920, the panel routes and traps focus,
@@ -576,7 +634,18 @@ emits a `NaN` attribute or a numeral outside its frame, and — §12d — that t
 the real one: its subsolar longitude tracks UTC to inside the equation of time, it
 does *not* move when the camera swings 8°, and the lit fraction of the face does.
 §14 covers session 8: the chapter jump reaches every `section[data-chapter]` in
-document order, survives 360px, and no index bar prints `c/km` again.
+document order and survives 360px, no index bar prints `c/km` again, and — §14c —
+the globe is actually in the reader's hands.
+
+★ **The first check in §14c is not about zooming.** It is one `elementFromPoint`
+asserting that a point on the disc hit-tests to the globe, and it would have caught
+either of the two silent failures above on its own — as would the one beside it,
+which asserts the disc is still *painted* under `#scrim` and `main` while being
+*hit* above them. Prefer a behavioural check to a source-level grep here: a third
+bug nearly shipped behind those two, an unterminated comment in `app.css` that ate
+the `z-index` rule without a word, and a grep for the selector would have passed
+it. A malformed comment in `index.html` did the same thing again a few minutes
+later and put its own prose on the phone hero.
 
 One trap worth knowing before you tune a sleep against it: **the idle globe drift is
 frame-rate-limited under headless.** `dt` in `js/globe.js` is clamped to 0.05 s so a

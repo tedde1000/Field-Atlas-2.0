@@ -1718,24 +1718,215 @@ function boot() {
     panel.refresh();
   });
 
-  /* Globe pins. The canvas stays pointer-events:none for everything except the
-     hero, where there is no body copy under it — otherwise a fixed layer at
-     z-index 1 would sit on top of §02 and §04 and swallow clicks meant for the
-     entries and the catalogue cells. */
+  /* ====================================================== THE GLOBE, IN HAND
+   * ★ TURN IT, ZOOM IT, AND PRESS WHAT YOU FIND.
+   *
+   * Theodor: "if I have my thumb on the globe I could zoom in on it, just to get
+   * closer to Sweden and where all the tracks are, and then press them."
+   *
+   * The pressing half was WRITTEN two sessions ago and has never once run. The
+   * handlers below have always been here and `body.globe-hot` has always been
+   * toggled, but no stylesheet rule ever consumed that class — so `pointer-events:
+   * none` on #globe-wrap inherited straight through to the canvas and every event
+   * went to the page behind it. Nothing threw and the cursor never changed, which
+   * is exactly why it survived. The rule is in app.css now, beside a note saying
+   * what it is for.
+   *
+   * The canvas is still inert everywhere but the hero, and that part of the old
+   * comment was right: it is a fixed layer at z-index 1, and awake below the hero
+   * it would sit on top of §02's entries and §04's cells and eat their clicks.
+   *
+   * ★ THE PAGE KEEPS THE VERTICAL SCROLL, WHICHEVER GESTURE WINS. `touch-action:
+   * pan-y` hands the browser every vertical drag before this code sees it, which
+   * matters most on a phone, where the disc lies under the hero copy and a reader
+   * flicking upward is scrolling, not turning the Earth. What is left for us is
+   * the horizontal drag, the two-finger pinch, and the tap.
+   *
+   * ★ THE LISTENERS ARE ON #globe-hit, NOT ON THE CANVAS. The disc has to be
+   * painted UNDER #scrim and hit ABOVE `main`, and no single element can be both —
+   * see the long note in app.css. #globe-hit is an empty box in exactly the same
+   * place, so its rect and the canvas's are interchangeable; the canvas is still
+   * what the panel is opened FROM, because that is what the reader pressed.
+   * ===================================================================== */
   const globeCanvas = $('#globe');
-  const pinAt = (ev) => {
-    const r = globeCanvas.getBoundingClientRect();
-    return globe.hitTest(ev.clientX - r.left, ev.clientY - r.top, 16);
+  const globeHit = $('#globe-hit');
+  const canvasXY = (ev) => {
+    const r = globeHit.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
   };
-  globeCanvas.addEventListener('click', (ev) => {
-    const pin = pinAt(ev);
-    if (!pin) return;
-    const ev0 = EVENTS.find(x => x.venue.id === pin.id);
-    panel.openFrom(ev0 ? 'date/' + ev0.key : 'circuit/' + pin.id, globeCanvas);
+  const pinAt = (ev) => {
+    const p = canvasXY(ev);
+    return globe.hitTest(p.x, p.y, 16);
+  };
+  const openPin = (pin) => {
+    const e0 = EVENTS.find(x => x.venue.id === pin.id);
+    panel.openFrom(e0 ? 'date/' + e0.key : 'circuit/' + pin.id, globeCanvas);
+  };
+
+  /* ★ TWO INPUT PATHS, AND THE SPLIT IS FORCED BY `touch-action: pan-y`.
+   *
+   * Pointer events are the modern answer and they handle the mouse, the pen and a
+   * single finger perfectly. They do NOT handle the pinch here, and it took a
+   * failing test to find out why: while `touch-action` still permits the browser a
+   * gesture of its own, Chrome hands the page only the FIRST touch point as a
+   * pointer — measured, a genuine two-finger spread on the disc produced exactly
+   * one `pointerdown` and one stream of `pointermove`. The second thumb never
+   * arrived, so nothing could tell a pinch from a drag.
+   *
+   * The fix is not `touch-action: none`. That would deliver every pointer, and it
+   * would also take vertical scrolling away from a finger anywhere on the disc —
+   * which on a phone is most of the hero, and is the one thing a reader is more
+   * likely to want than zooming. The legacy Touch Events API has no such problem:
+   * `ev.touches` carries every contact regardless, as the same measurement showed.
+   *
+   * So: POINTERS turn and tap, TOUCHES pinch, and `pinching` keeps them out of
+   * each other's way. Two paths for two jobs rather than one path doing neither.
+   */
+  const down = new Map();               // live pointers, for the turn
+  let moved = 0, downAt = 0, turning = false, pinching = false, pinchSpan = 0;
+
+  const spanOf = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+  globeHit.addEventListener('pointerdown', (ev) => {
+    down.set(ev.pointerId, canvasXY(ev));
+    globeHit.setPointerCapture(ev.pointerId);
+    globe.setGesture(true);
+    moved = 0; downAt = performance.now(); turning = false;
   });
-  globeCanvas.addEventListener('pointermove', (ev) => {
-    globeCanvas.style.cursor = pinAt(ev) ? 'pointer' : '';
+
+  globeHit.addEventListener('pointermove', (ev) => {
+    if (!down.has(ev.pointerId)) {
+      // not a drag — just the mouse passing over. Say what is pressable.
+      globeHit.style.cursor = pinAt(ev) ? 'pointer' : '';
+      return;
+    }
+    const p = canvasXY(ev);
+    const prev = down.get(ev.pointerId);
+    down.set(ev.pointerId, p);
+    if (pinching) { moved = 99; return; }        // the touch path has this gesture
+
+    const dx = p.x - prev.x, dy = p.y - prev.y;
+    moved += Math.hypot(dx, dy);
+    /* ★ A few pixels of slop before this becomes a turn. A tap on a pin is never
+       perfectly still — least of all a thumb on a phone — and treating the first
+       stray pixel as a drag would spin the planet a degree away from whatever the
+       reader was trying to press, every time. */
+    if (moved > 5) {
+      turning = true;
+      document.body.classList.add('globe-turning');
+      globe.turnBy(dx, dy);
+    }
   });
+
+  const endPointer = (ev) => {
+    if (!down.has(ev.pointerId)) return;
+    down.delete(ev.pointerId);
+    if (down.size) return;
+    globe.setGesture(false);
+    document.body.classList.remove('globe-turning');
+    /* A tap is a press that went nowhere and did not linger. `click` is not usable
+       here: pointer capture plus a cancelled touch means it does not fire
+       reliably, and it would fire at the end of a drag as well. */
+    if (ev.type === 'pointerup' && !turning && !pinching && moved <= 5 &&
+        performance.now() - downAt < 600) {
+      const pin = pinAt(ev);
+      if (pin) openPin(pin);
+    }
+    turning = false;
+  };
+  globeHit.addEventListener('pointerup', endPointer);
+  globeHit.addEventListener('pointercancel', endPointer);
+
+  /* -- the pinch, from touch events, for the reason set out above -------------- */
+  globeHit.addEventListener('touchstart', (ev) => {
+    if (ev.touches.length < 2) return;
+    pinching = true;
+    pinchSpan = spanOf(ev.touches);
+    globe.setGesture(true);
+  }, { passive: true });
+
+  globeHit.addEventListener('touchmove', (ev) => {
+    if (ev.touches.length < 2) return;
+    /* Not passive, and it must not be: two fingers spreading is this canvas's
+       gesture, and without claiming it the page can still decide halfway through
+       that it was a scroll. `touch-action: pan-y` has already told the browser
+       that much; this is the same statement for the gesture actually in progress. */
+    ev.preventDefault();
+    const span = spanOf(ev.touches);
+    if (pinchSpan > 8 && span > 8) {
+      const r = globeHit.getBoundingClientRect();
+      globe.zoomBy(span / pinchSpan,
+        (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - r.left,
+        (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - r.top);
+    }
+    pinchSpan = span;
+  }, { passive: false });
+
+  const endPinch = (ev) => {
+    if (!pinching) return;
+    // one finger lifting out of a pinch re-baselines rather than snapping
+    if (ev.touches.length >= 2) { pinchSpan = spanOf(ev.touches); return; }
+    if (ev.touches.length) return;
+    pinching = false;
+    if (!down.size) globe.setGesture(false);
+  };
+  globeHit.addEventListener('touchend', endPinch);
+  globeHit.addEventListener('touchcancel', endPinch);
+
+  /* ★ HELD BEHIND A MODIFIER, exactly as §03's stage is — see the note over
+     `wheelNeedsMod` in js/layout3d.js. The globe is fixed and covers a third of
+     the hero; swallowing the plain wheel there would turn the first screen of the
+     site into somewhere the reader's scroll stops working. ctrl/⌘ is also what a
+     trackpad pinch sends, so the gesture that means zoom everywhere else means
+     zoom here too, and everything else goes to the page. */
+  globeHit.addEventListener('wheel', (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault();
+    const p = canvasXY(ev);
+    /* ★ 0.0012, measured rather than picked: a mouse notch is deltaY ≈ 120, which
+       this turns into 1.15x, so the full 1x–4.2x range is about ten notches. The
+       first draft ran at 0.004 and crossed the entire range in six, which is not a
+       zoom, it is a switch. A trackpad's pinch arrives as many small deltas and
+       lands in the same place because the response is exponential in the delta. */
+    globe.zoomBy(Math.exp(-ev.deltaY * 0.0012), p.x, p.y);
+  }, { passive: false });
+
+  /* --- the globe's own chrome: a hint, and a way back out --------------------
+   * The hint is the entire discoverability story for this feature — a canvas
+   * cannot advertise itself, and nobody pinches a background image on the off
+   * chance. It names the gesture the device can actually do, and it goes away for
+   * good once the reader has used it, because at that point it is only clutter.
+   * RESET VIEW appears only when there is something to reset. */
+  const globeUI = $('#globe-ui');
+  const globeHint = $('#globe-hint');
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  globeHint.textContent = coarse
+    ? 'DRAG TO TURN · PINCH TO ZOOM'
+    : 'DRAG TO TURN · CTRL-SCROLL TO ZOOM';
+  let hintUsed = false;
+  try { hintUsed = localStorage.getItem('fa2.globeHint') === 'done'; } catch {}
+  if (hintUsed) globeHint.hidden = true;
+
+  function syncGlobeUI() {
+    const z = globe.zoom();
+    document.body.classList.toggle('globe-zoomed', z > 1.02);
+    if (!hintUsed && z > 1.02) {
+      hintUsed = true;
+      globeHint.hidden = true;
+      try { localStorage.setItem('fa2.globeHint', 'done'); } catch {}
+    }
+  }
+  $('#globe-reset').addEventListener('click', () => globe.resetView());
+  /* ★ Assigned here rather than passed to createGlobe(), and that is not fussiness:
+     the globe is built long before this block, and a callback handed over at
+     construction could fire — setDim() resets the zoom, and a deep link boots the
+     page already scrolled — while `globeUI` and `hintUsed` are still inside their
+     own temporal dead zone. Attaching it once everything it touches exists is one
+     line and cannot be got wrong later. The globe calls it whenever the TARGET
+     zoom moves, which covers the reader's own gestures and the automatic reset on
+     leaving the hero, and costs nothing when nobody is zooming. */
+  globe.onZoom = syncGlobeUI;
+  syncGlobeUI();
 
   /* --- the ticking bits: hero readout, rails, per-entry countdowns --- */
   const cdNodes = [...document.querySelectorAll('[data-cd]')];

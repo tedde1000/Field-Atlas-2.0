@@ -2033,6 +2033,229 @@ console.log('\n14 · session 8 — getting out of the scroll, and saying what a 
   await q.close();
 }
 
+/* -- 14c · ★ THE GLOBE IS IN THE READER'S HANDS ----------------------------
+ *
+ *   "if I have my thumb on the globe I could zoom in on it, just to get closer to
+ *    Sweden and where all the tracks are, and then press them."
+ *
+ * The pressing half was written in session 2 and had NEVER RUN. `body.globe-hot`
+ * was toggled and the handlers were bound, but no rule consumed the class, so
+ * `pointer-events: none` inherited from #globe-wrap; and once that was fixed the
+ * events still went to `#hero`, because `main` is `z-index: 3` and the globe was
+ * 1. Two independent silent failures stacked on the same feature, neither of
+ * which throws, logs, or shows up as anything but "clicking does nothing".
+ *
+ * So the first check here is not about zooming at all — it is that a point on the
+ * disc HIT-TESTS TO THE CANVAS. That is the invariant both bugs broke, it is one
+ * `elementFromPoint` call, and it would have caught either of them on its own.
+ * (A third nearly shipped behind them: an unterminated comment in app.css ate the
+ * z-index rule silently. A behavioural check catches that class of thing too — a
+ * source-level grep for the selector would have passed.) */
+{
+  const q = await open('', 1440, 900);
+  const geom = await q.evaluate(() => {
+    const hit = document.getElementById('globe-hit'), b = hit.getBoundingClientRect();
+    const wrap = document.getElementById('globe-wrap').getBoundingClientRect();
+    const at = (dx, dy) => {
+      const el = document.elementFromPoint(b.x + b.width / 2 + dx, b.y + b.height / 2 + dy);
+      return el?.id || el?.tagName;
+    };
+    return {
+      hot: document.body.classList.contains('globe-hot'),
+      centre: at(0, 0), inner: at(-60, -120),
+      corner: at(-b.width / 2 + 12, -b.height / 2 + 12),   // outside the clip circle
+      hitZ: +getComputedStyle(hit).zIndex,
+      wrapZ: +getComputedStyle(document.getElementById('globe-wrap')).zIndex,
+      scrimZ: +getComputedStyle(document.getElementById('scrim')).zIndex,
+      mainZ: +getComputedStyle(document.querySelector('main')).zIndex,
+      pe: getComputedStyle(hit).pointerEvents,
+      touch: getComputedStyle(hit).touchAction,
+      aligned: Math.abs(b.x - wrap.x) < 0.5 && Math.abs(b.y - wrap.y) < 0.5 &&
+               Math.abs(b.width - wrap.width) < 0.5 && Math.abs(b.height - wrap.height) < 0.5,
+    };
+  });
+  ok(geom.hot && geom.centre === 'globe-hit' && geom.inner === 'globe-hit',
+    '★ a point on the disc actually reaches the globe — pins are pressable at all',
+    `centre=${geom.centre} inner=${geom.inner} pe=${geom.pe}`);
+  ok(geom.hitZ > geom.mainZ,
+    'because the hit layer is above the page while the disc is the subject',
+    `hit ${geom.hitZ} vs main ${geom.mainZ}`);
+  /* ★ THE OTHER HALF, and the whole reason the hit layer exists. Lifting the
+     CANVAS over `main` also lifts it over #scrim, and #scrim is the gradient that
+     pours the page colour back across the type — tried, rendered, and it put a
+     full-brightness planet directly behind the hero copy on a phone. The disc is
+     hit above the page and must still be PAINTED under it. */
+  ok(geom.wrapZ < geom.scrimZ && geom.scrimZ < geom.mainZ,
+    '★ while the disc itself is still painted under the scrim and the page',
+    `globe ${geom.wrapZ} < scrim ${geom.scrimZ} < main ${geom.mainZ}`);
+  ok(geom.aligned,
+    'and the hit layer lies exactly over the disc it stands in for');
+  /* the hit layer is a square around a circular planet: its corners must hand
+     their events back, or an invisible box takes a fifth of the hero's copy */
+  ok(geom.corner !== 'globe-hit',
+    '★ but its empty corners hand the hero back its clicks', `corner=${geom.corner}`);
+  ok(geom.touch === 'pan-y',
+    'and a finger dragged down the disc still scrolls the page', `touch-action=${geom.touch}`);
+
+  /* --- ctrl-wheel zooms, and a plain wheel does not --- */
+  const c0 = await q.evaluate(() => {
+    const b = document.getElementById('globe').getBoundingClientRect();
+    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
+  });
+  await q.mouse.move(c0.cx, c0.cy);
+  const scroll0 = await q.evaluate(() => window.scrollY);
+  for (let i = 0; i < 4; i++) { await q.mouse.wheel({ deltaY: 200 }); await sleep(60); }
+  await sleep(600);
+  const plain = await q.evaluate(() => ({
+    y: window.scrollY, zoom: +document.getElementById('globe').dataset.zoom }));
+  ok(plain.y > scroll0 + 100 && plain.zoom < 1.02,
+    '★ a plain wheel over the globe scrolls the page, it does not zoom it',
+    `scrollY ${scroll0}->${plain.y}, zoom ${plain.zoom}`);
+  await q.close();
+}
+{
+  const q = await open('', 1440, 900);
+  const c0 = await q.evaluate(() => {
+    const b = document.getElementById('globe').getBoundingClientRect();
+    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
+  });
+  await q.mouse.move(c0.cx + 40, c0.cy - 150);
+  await q.keyboard.down('Control');
+  for (let i = 0; i < 10; i++) { await q.mouse.wheel({ deltaY: -120 }); await sleep(70); }
+  await q.keyboard.up('Control');
+  await sleep(2000);
+  const zoomed = await q.evaluate(() => {
+    const c = document.getElementById('globe');
+    return { zoom: +c.dataset.zoom, lat: +c.dataset.lat, raster: +c.dataset.raster,
+             ms: +c.dataset.surfMs,
+             cls: document.body.classList.contains('globe-zoomed'),
+             reset: getComputedStyle(document.getElementById('globe-reset')).display };
+  });
+  ok(zoomed.zoom > 2, '★ ctrl-scroll on the disc zooms in', `zoom=${zoomed.zoom}`);
+  /* ★ It has to zoom TOWARD THE POINTER, not about the disc centre — #globe-wrap
+     hangs off the right edge of the viewport, so a centred zoom drives whatever
+     the reader is looking at off the screen exactly as they lean in. Aimed above
+     the centre, the camera must have climbed north. */
+  ok(zoomed.lat > 52,
+    '★ and toward what is under the pointer — the camera walked north to meet it',
+    `camera latitude ${zoomed.lat}° (from 46°)`);
+  ok(zoomed.ms < 16,
+    'and the surface pass still holds its frame budget zoomed in', `${zoomed.ms} ms`);
+  ok(zoomed.cls && zoomed.reset !== 'none',
+    'RESET VIEW appears once there is something to reset', `display=${zoomed.reset}`);
+
+  await q.click('#globe-reset');
+  await sleep(1800);
+  const back = await q.evaluate(() => ({
+    zoom: +document.getElementById('globe').dataset.zoom,
+    reset: getComputedStyle(document.getElementById('globe-reset')).display }));
+  ok(back.zoom < 1.02 && back.reset === 'none',
+    'and puts the whole planet back', `zoom=${back.zoom}`);
+  await q.close();
+}
+
+/* --- a tap opens a pin; a drag through the same pin must not --------------
+ * The projection here is the SUITE'S OWN, written out from the orthographic
+ * formulae rather than read back off the page, so this cannot pass by agreeing
+ * with a broken globe about where a circuit is. */
+{
+  const RADt = Math.PI / 180;
+  const project = (v, cam) => {
+    const p = v.lat * RADt, l = v.lon * RADt, cl = Math.cos(p);
+    const a = cl * Math.sin(l), b = cl * Math.cos(l), c = Math.sin(p);
+    const sLon = Math.sin(cam.lon * RADt), cLon = Math.cos(cam.lon * RADt);
+    const sLat = Math.sin(cam.lat * RADt), cLat = Math.cos(cam.lat * RADt);
+    const P = b * cLon + a * sLon;
+    if (sLat * c + cLat * P < 0) return null;
+    return { x: cam.cx + cam.r * (a * cLon - b * sLon),
+             y: cam.cy - cam.r * (cLat * c - sLat * P) };
+  };
+  const camOf = (page) => page.evaluate(() => {
+    const c = document.getElementById('globe'), b = c.getBoundingClientRect();
+    return { lon: +c.dataset.lon, lat: +c.dataset.lat,
+             cx: b.x + b.width / 2, cy: b.y + b.height / 2,
+             r: (Math.min(b.width, b.height) / 2 - 2) / 1.14 * (+c.dataset.zoom) };
+  });
+  const venue = VENUES.find(v => v.events && v.events.length);
+
+  const q = await open('', 1440, 900);
+  let p = project(venue, await camOf(q));
+  await q.mouse.move(p.x, p.y);
+  await q.mouse.down(); await sleep(60); await q.mouse.up();
+  await sleep(900);
+  const tapped = await q.evaluate(() => ({
+    open: !document.getElementById('panel').hidden, hash: location.hash }));
+  ok(tapped.open && tapped.hash.startsWith('#date/'),
+    `★ tapping ${venue.id}'s pin opens its date`, `hash=${tapped.hash}`);
+  await q.keyboard.press('Escape');
+  await sleep(500);
+  await q.close();
+
+  const w = await open('', 1440, 900);
+  p = project(venue, await camOf(w));
+  const lon0 = await w.evaluate(() => +document.getElementById('globe').dataset.lon);
+  await w.mouse.move(p.x - 70, p.y);
+  await w.mouse.down();
+  for (let i = 1; i <= 8; i++) { await w.mouse.move(p.x - 70 + i * 9, p.y); await sleep(25); }
+  await w.mouse.up();
+  await sleep(900);
+  const dragged = await w.evaluate(() => ({
+    open: !document.getElementById('panel').hidden,
+    lon: +document.getElementById('globe').dataset.lon }));
+  /* ★ Both halves matter. A drag that opened the panel would make the globe
+     unturnable; a "drag" that turned nothing would mean the tap threshold had
+     swallowed the gesture. The pin is deliberately in the path of the drag. */
+  ok(!dragged.open, '★ and dragging THROUGH that same pin does not', `panel open=${dragged.open}`);
+  ok(Math.abs(dragged.lon - lon0) > 5,
+    'because it turned the planet instead', `lon ${lon0}° -> ${dragged.lon}°`);
+  await w.close();
+}
+
+/* --- a pinch, and what happens when the reader leaves ---------------------- */
+{
+  const q = await open('', 390, 844);
+  await q.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, hasTouch: true });
+  await sleep(1200);
+  const cdp = await q.createCDPSession();
+  const b0 = await q.evaluate(() => {
+    const b = document.getElementById('globe').getBoundingClientRect();
+    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
+  });
+  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', {
+    type, touchPoints: pts.map((p, i) => ({ x: p[0], y: p[1], id: i })) });
+  let a = [b0.cx - 40, b0.cy - 26], b = [b0.cx + 40, b0.cy + 26];
+  await touch('touchStart', [a, b]);
+  for (let i = 0; i < 14; i++) {
+    a = [a[0] - 7, a[1] - 5]; b = [b[0] + 7, b[1] + 5];
+    await touch('touchMove', [a, b]); await sleep(35);
+  }
+  await touch('touchEnd', []);
+  await sleep(2000);
+  const pinched = await q.evaluate(() => ({
+    zoom: +document.getElementById('globe').dataset.zoom,
+    hint: document.getElementById('globe-hint').hidden }));
+  ok(pinched.zoom > 1.8, '★ two fingers on the disc pinch it open', `zoom=${pinched.zoom}`);
+  /* the hint is the only advertisement a canvas gets; once the gesture has been
+     used it is clutter, and it must not come back on the next visit either */
+  ok(pinched.hint, 'and the gesture hint retires once it has been taken', `hidden=${pinched.hint}`);
+
+  /* ★ Leaving the hero has to put it back. Below DRIFT_DIM the disc is a backdrop
+     and the pointer is off it, so a zoom left standing is one the reader can
+     neither see the point of nor undo — just a fragment of sphere behind §04. */
+  await q.evaluate(() => window.scrollTo(0, 3000));
+  await sleep(2400);
+  const left = await q.evaluate(() => ({
+    zoom: +document.getElementById('globe').dataset.zoom,
+    pe: getComputedStyle(document.getElementById('globe-hit')).pointerEvents }));
+  ok(left.zoom < 1.05, '★ and scrolling away puts the planet back', `zoom=${left.zoom}`);
+  ok(left.pe === 'none',
+    '★ and the disc goes inert below the hero, so §02 and §04 keep their clicks',
+    `pointer-events=${left.pe}`);
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'none of the globe gestures raise a page error', q.__errs.join(' | '));
+  await q.close();
+}
+
 await browser.close();
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

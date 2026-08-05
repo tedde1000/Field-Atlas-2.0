@@ -488,13 +488,27 @@ function bake(topoPx, bmPx, nightPx, bmW, bmH) {
    * the cores. Wide enough to survive any sampling the limb can do to it — and it
    * is also simply what a city looks like from orbit, which is a glow in the haze
    * rather than a point. */
+  /* ★ AND THE BLOOM IS TIGHTER THAN IT WAS, because the limb no longer needs it
+   * to be that wide. The paragraph above is still the reason it exists at all —
+   * but it was sized when a bilinear fetch was the only sampling this plate got,
+   * and js/globe.js now widens its own footprint toward the limb (see FOOTPRINT
+   * there), which averages over the compressed area properly rather than landing
+   * between two texels and missing. The bloom no longer has to be wide enough to
+   * survive being missed; it only has to be wide enough not to scintillate.
+   *
+   * What forced the question is the zoom. A blob baked at a fixed radius in TEXELS
+   * grows on screen with magnification, so at 4x the reader was looking at
+   * forty-pixel clouds of haze over Scandinavia with the terrain lost underneath —
+   * the one view where they most wanted to see where they were. Pulled in to about
+   * three texels, with more of the sharp original left standing, cities read as
+   * cities at 1x and as points of light close up. */
   let lamps = null;
   if (nightPx) {
     const raw = new Float32Array(N);
     for (let i = 0, o = 0; i < N; i++, o += 4) raw[i] = emission(nightPx, o);
-    const soft = blurField(raw, Math.round(2 * SCALE), 2);
+    const soft = blurField(raw, Math.round(1.5 * SCALE), 2);
     lamps = new Float32Array(N);
-    for (let i = 0; i < N; i++) lamps[i] = Math.min(255, raw[i] * 0.55 + soft[i] * 3.2 * SCALE);
+    for (let i = 0; i < N; i++) lamps[i] = Math.min(255, raw[i] * 0.85 + soft[i] * 2.4 * SCALE);
   }
 
   /* -- LAND-COVER CHROMA, and the resolution is the point ------------------
