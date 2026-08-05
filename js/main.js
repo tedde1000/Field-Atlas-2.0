@@ -8,8 +8,11 @@
  * ======================================================================== */
 
 import { VENUES, TRACKS, HOME } from '../data/atlas.js';
+/* ★ The one data module that is NOT generated — read its header before adding a
+   row. It is empty on purpose; §03's atlas is built to take it at any length. */
+import { EXTRA_TRACKS } from '../data/atlas-extra.js';
 import { createStarfield } from './starfield.js';
-import { createGlobe } from './globe.js';
+import { createGlobe, ATLAS_ZOOM_MAX } from './globe.js';
 import { createCircuitFigure } from './circuit.js';
 import { loopPath, loopLength, layoutPath, hasRadii, flattenPath,
          curvature, numberedCorners, cornerRuns } from './loop.js';
@@ -17,7 +20,8 @@ import { initReveal, initScroll } from './scroll.js';
 import { createPanel } from './panel.js';
 import { stage3d, tierMarks, poseFit, mount as mount3d } from './layout3d.js';
 import { packingList, setOverlay, overlay, plan1x, eventKey, GEAR_CATS, kit,
-         adopt, addItem, renameItem, setCategory, setRental, setQty, deleteItem } from './gear.js';
+         adopt, addItem, renameItem, setCategory, setRental, setQty, deleteItem,
+         GEAR_CATALOGUE, catalogueLeft, addFromCatalogue } from './gear.js';
 
 /* ============================================================ small helpers */
 const $ = (s, r = document) => r.querySelector(s);
@@ -548,10 +552,17 @@ function renderKit() {
   const bodies = k.items.filter(i => i.category === 'Bodies' && !i.rental).length;
   const lenses = k.items.filter(i => i.category === 'Lenses' && !i.rental).length;
 
+  /* ★ The catalogue is named here, in the chapter, and not only in the panel.
+     §05 is the essay about the kit and the panel is the tool, so a shelf of
+     equipment that is not in the list yet is a fact about the kit and belongs in
+     the essay — and the reader has to know it exists to go and open it. The
+     sentence disappears when the shelf is empty rather than reading "0 more". */
+  const shelfLeft = catalogueLeft(k.items).length;
   $('#kit-lede').textContent =
     `${owned.length} pieces of equipment I own, ${rental.length} I would hire, and the ` +
     `basics that live in the bag. Every date in §02 draws its packing list from this same ` +
-    `inventory — the kit is one list, the weekend is a selection from it.`;
+    `inventory — the kit is one list, the weekend is a selection from it.` +
+    (shelfLeft ? ` ${shelfLeft} more are on the shelf in EDIT YOUR KIT, a press each.` : '');
   $('#kit-sub').textContent =
     `${bodies} ${bodies === 1 ? 'BODY' : 'BODIES'} · ${lenses} ${lenses === 1 ? 'LENS' : 'LENSES'} · ` +
     `${k.items.length} ITEMS`;
@@ -684,6 +695,29 @@ function kitPanel() {
     every date's packing list is a selection from this one inventory, so it is worth being
     complete.</p>`;
 
+  /* ★ THE SHELF — see GEAR_CATALOGUE in js/gear.js for what is on it and what was
+     deliberately left off. It is a list of things this page does NOT claim he owns,
+     which is exactly why it cannot live in the recovered 1.x inventory: that array's
+     whole value is that §05 can say "your equipment" and be telling the truth.
+     Rows already in the kit are filtered out by name, so the shelf empties as it is
+     used and disappears when there is nothing left to offer. */
+  const left = catalogueLeft(k.items);
+  const shelf = !left.length ? '' : `
+    <details class="kit-shelf" ${k.owned ? '' : 'open'}>
+      <summary class="mono">ADD FROM CATALOGUE<span class="n num">${left.length}</span></summary>
+      <p class="kit-shelf-note">Equipment that is not in the list yet. The tag is what it
+      arrives as — glass you would hire, everything else you would buy and keep — and one
+      press in the row above flips it either way.</p>
+      ${left.map(c => `
+        <div class="kit-offer">
+          <span class="nm">${esc(c.name)}${c.qty > 1 ? ` <span class="num mono">×${c.qty}</span>` : ''}</span>
+          <span class="kit-offer-cat mono">${esc(c.category)}</span>
+          <span class="tag mono${c.rental ? '' : ' tag--own'}">${c.rental ? 'RENTAL' : 'OWNED'}</span>
+          <button class="kit-add-one" type="button" data-kit="offer" data-offer="${esc(c.id)}"
+                  aria-label="Add ${esc(c.name)} to your kit">+</button>
+        </div>`).join('')}
+    </details>`;
+
   const src = k.source === 'own'
     ? `${n} ITEM${n === 1 ? '' : 'S'} · ${rentals} TO HIRE · SAVED ON THIS DEVICE · 1.x UNTOUCHED`
     : k.source === 'live'
@@ -701,6 +735,7 @@ function kitPanel() {
     ${addForm}
     ${groups}
     ${empty}
+    ${shelf}
     <div class="p-src mono">${src}</div>
     <a class="p-out mono" href="#kit" data-jump="kit">READ THE CHAPTER →</a>`;
 }
@@ -1308,6 +1343,362 @@ function renderFigure(fig) {
   show(active);
 }
 
+/* ========================================================= §03 · THE ATLAS
+ * ★ WHERE THE GLOBE WENT, AND WHY IT IS BETTER OFF HERE.
+ *
+ * Theodor: "when I'm zooming in on the globe, I feel like you should be able to
+ * maybe have a separate section for that… remove the interactive thing on the
+ * main page where you load in, because that's just weird." And, on where it
+ * should go instead: "in the same section as the anatomy, but just a different
+ * tab in the same area."
+ *
+ * The hero's globe was a background that turned out to be a control, which is
+ * the wrong way round: it had to be discovered, it needed a line of type to
+ * advertise itself, it could not be zoomed past 4.2x because eight pins had to
+ * stay separable behind a page of body copy, and on a phone it lay directly
+ * under the lede. Every one of those constraints came from being a backdrop.
+ *
+ * Here it is the subject. The stage is its own element, so it takes its own
+ * pointers and #globe-hit is gone with the reason for it (see app.css). Nothing
+ * is behind it, so it runs to ATLAS_ZOOM_MAX rather than 4.2. And because it has
+ * a box rather than a viewport, the raster covers what is on screen instead of a
+ * disc mostly hanging off the edge — which is most of why it is sharp.
+ *
+ * ★ THE LIST IS NOT A SECOND §04. §04 is the reference layer read as prose —
+ * shapes, lap lengths, corner counts. This is the same circuits read as
+ * POSITIONS, and its only jobs are to find one by name and to fly the camera to
+ * it. Both surfaces open the identical panel, from the identical route.
+ * ====================================================================== */
+
+/**
+ * Every plotted circuit, in one shape, from the three places they come from.
+ *
+ * ★ `ranked` IS WHETHER THERE IS ANYTHING TO OPEN. A venue and a competition
+ * circuit have traced geometry behind them and a panel worth showing; a row from
+ * data/atlas-extra.js is a name and a coordinate and nothing else. Rather than
+ * open an empty panel and call it a feature, those rows are marked PLOTTED and
+ * are not pressable. See the header of that file.
+ */
+function atlasRows() {
+  const rows = [];
+  const nx = nextEvent();
+  for (const v of VENUES) {
+    const e0 = EVENTS.find(x => x.venue.id === v.id);
+    rows.push({
+      id: v.id, name: v.name, label: (v.short || v.name).replace(/\s*\(.*\)/, ''),
+      city: v.city, lat: v.lat, lon: v.lon,
+      type: e0?.type || 'karting', accent: v.accent,
+      event: true, ranked: true, next: !!nx && nx.venue.id === v.id,
+      route: e0 ? 'date/' + e0.key : 'circuit/' + v.id,
+    });
+  }
+  for (const t of TRACKS) {
+    rows.push({
+      id: t.id, name: t.name, label: t.name.replace(/\s*\(.*\)/, ''),
+      city: t.city, lat: t.lat, lon: t.lon,
+      type: 'karting', event: false, ranked: true, route: 'circuit/' + t.id,
+    });
+  }
+  for (const x of EXTRA_TRACKS) {
+    rows.push({
+      id: x.id, name: x.name, label: String(x.name).replace(/\s*\(.*\)/, ''),
+      city: x.city, lat: x.lat, lon: x.lon,
+      /* an unknown discipline falls back rather than throwing — the file is
+         hand-maintained, so a typo there must not take the section down */
+      type: DISCIPLINE[x.kind] ? x.kind : 'karting',
+      event: false, ranked: false, route: null,
+    });
+  }
+  return rows;
+}
+
+function mountAtlas(panel) {
+  const host = $('#atlas'), stage = $('#atlas-stage'), cv = $('#atlas-globe');
+  if (!host || !stage || !cv) return null;
+
+  const rows = atlasRows();
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  /* Sweden in the middle of the box at a first glance, because that is where the
+     season is. The camera is the reader's from the first drag onward. */
+  const globe = createGlobe(cv, {
+    lon: 15.5, lat: 59, zoomMax: ATLAS_ZOOM_MAX, labels: true,
+  });
+  globe.setPins(rows.map(r => ({
+    id: r.id, lat: r.lat, lon: r.lon, color: r.accent,
+    event: r.event, ranked: r.ranked, next: r.next, label: r.label,
+  })), HOME);
+
+  /* ---------------------------------------------------- the chrome it owns */
+  const meta = $('#atlas-meta'), hintEl = $('#atlas-hint'), srcEl = $('#atlas-src');
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  hintEl.textContent = coarse
+    ? 'DRAG · PINCH TO ZOOM · TAP A CIRCUIT'
+    : 'DRAG · CTRL-SCROLL TO ZOOM · CLICK A CIRCUIT';
+
+  const measured = rows.filter(r => r.ranked).length;
+  srcEl.textContent = rows.length === measured
+    ? `${measured} CIRCUITS · EVERY ONE MEASURED`
+    : `${rows.length} CIRCUITS · ${measured} MEASURED · ${rows.length - measured} PLOTTED`;
+
+  function syncChrome() {
+    const z = globe.zoom();
+    host.classList.toggle('is-moved', z > 1.02);
+    meta.textContent = `${rows.length} PINNED · ${globe.mode().toUpperCase()} · ` +
+      `${z < 10 ? z.toFixed(1) : Math.round(z)}×`;
+  }
+  globe.onZoom = syncChrome;
+
+  /* ---------------------------------------------------------- the two views */
+  host.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-atlas]');
+    if (!btn) return;
+    const what = btn.dataset.atlas;
+    if (what === 'reset') { globe.resetView(); syncChrome(); return; }
+    globe.setMode(what);
+    for (const b of host.querySelectorAll('.atlas-modes button')) {
+      b.setAttribute('aria-pressed', String(b.dataset.atlas === globe.mode()));
+    }
+    syncChrome();
+  });
+
+  /* ======================================================= the reader's hands
+   * ★ TWO INPUT PATHS, AND THE SPLIT IS FORCED BY `touch-action: pan-y`.
+   *
+   * Carried over from the hero wholesale, because the reasoning is unchanged and
+   * it was expensive to find. Pointer events handle the mouse, the pen and a
+   * single finger perfectly, and they do NOT handle the pinch: while
+   * `touch-action` still permits the browser a gesture of its own, Chrome hands
+   * the page only the FIRST touch point as a pointer — measured, a genuine
+   * two-finger spread produced exactly one `pointerdown`. The legacy Touch Events
+   * API has no such problem; `ev.touches` carries every contact regardless.
+   *
+   * And `touch-action: none` is not the fix. This stage is as tall as a phone and
+   * sits in the middle of a scrolling page, so owning every vertical drag would
+   * make it a place the page stops. Same bargain §03's other stage strikes.
+   *
+   * ★ WHAT IS DIFFERENT FROM THE HERO: one element. There is no scrim over this
+   * canvas, so nothing has to be painted under one layer and hit above another,
+   * and the whole #globe-hit apparatus simply does not arise.
+   * ==================================================================== */
+  const at = (ev) => {
+    const r = stage.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  };
+  const pinAt = (ev) => {
+    const p = at(ev);
+    const hit = globe.hitTest(p.x, p.y, coarse ? 18 : 14);
+    /* a plotted-only row has no panel behind it, so it is not a target — see
+       atlasRows(). It still draws, still labels, and still turns up in the list. */
+    return hit && byId.get(hit.id)?.ranked ? hit : null;
+  };
+  const openPin = (pin) => {
+    const row = byId.get(pin.id);
+    if (row?.route) panel.openFrom(row.route, cv);
+  };
+
+  const down = new Map();
+  let moved = 0, downAt = 0, turning = false, pinching = false, pinchSpan = 0;
+  const spanOf = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+  /* ★ THE BAR IS NOT PART OF THE GLOBE, AND POINTER CAPTURE CANNOT TELL.
+     GLOBE / MAP / RESET VIEW sit inside the stage, so their pointerdown bubbles
+     to it — and `setPointerCapture` then retargets every later event, INCLUDING
+     THE CLICK, to the stage. The buttons were drawn, were hit-testable, and did
+     nothing at all: pressing MAP turned the planet a pixel instead. Exactly the
+     failure the hero's RESET VIEW had two sessions ago for the mirror-image
+     reason, and just as silent. So a press that starts on the chrome is the
+     chrome's, and the globe never hears about it. */
+  const onChrome = (ev) => !!ev.target.closest('.atlas-bar');
+
+  stage.addEventListener('pointerdown', (ev) => {
+    if (onChrome(ev)) return;
+    down.set(ev.pointerId, at(ev));
+    stage.setPointerCapture(ev.pointerId);
+    globe.setGesture(true);
+    moved = 0; downAt = performance.now(); turning = false;
+  });
+
+  stage.addEventListener('pointermove', (ev) => {
+    if (!down.has(ev.pointerId)) {
+      stage.classList.toggle('is-over-pin', !onChrome(ev) && !!pinAt(ev));
+      return;
+    }
+    const p = at(ev);
+    const prev = down.get(ev.pointerId);
+    down.set(ev.pointerId, p);
+    if (pinching) { moved = 99; return; }
+    const dx = p.x - prev.x, dy = p.y - prev.y;
+    moved += Math.hypot(dx, dy);
+    /* ★ A few pixels of slop before this becomes a turn. A tap on a pin is never
+       perfectly still — least of all a thumb — and treating the first stray pixel
+       as a drag would move the planet away from whatever was being pressed. */
+    if (moved > 5) {
+      turning = true;
+      stage.classList.add('is-grabbing');
+      globe.turnBy(dx, dy);
+      host.classList.add('is-moved');
+    }
+  });
+
+  const endPointer = (ev) => {
+    if (!down.has(ev.pointerId)) return;
+    down.delete(ev.pointerId);
+    if (down.size) return;
+    globe.setGesture(false);
+    stage.classList.remove('is-grabbing');
+    if (ev.type === 'pointerup' && !turning && !pinching && moved <= 5 &&
+        performance.now() - downAt < 600) {
+      const pin = pinAt(ev);
+      if (pin) openPin(pin);
+    }
+    turning = false;
+  };
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+
+  stage.addEventListener('touchstart', (ev) => {
+    if (ev.touches.length < 2) return;
+    pinching = true;
+    pinchSpan = spanOf(ev.touches);
+    globe.setGesture(true);
+  }, { passive: true });
+
+  stage.addEventListener('touchmove', (ev) => {
+    if (ev.touches.length < 2) return;
+    /* Not passive, and it must not be: two fingers spreading is this stage's own
+       gesture, and without claiming it the browser can still decide halfway
+       through that it was a scroll. */
+    ev.preventDefault();
+    const span = spanOf(ev.touches);
+    if (pinchSpan > 8 && span > 8) {
+      const r = stage.getBoundingClientRect();
+      globe.zoomBy(span / pinchSpan,
+        (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - r.left,
+        (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - r.top);
+    }
+    pinchSpan = span;
+  }, { passive: false });
+
+  const endPinch = (ev) => {
+    if (!pinching) return;
+    if (ev.touches.length >= 2) { pinchSpan = spanOf(ev.touches); return; }
+    if (ev.touches.length) return;
+    pinching = false;
+    if (!down.size) globe.setGesture(false);
+  };
+  stage.addEventListener('touchend', endPinch);
+  stage.addEventListener('touchcancel', endPinch);
+
+  /* ★ HELD BEHIND A MODIFIER, exactly as §03's other stage is. A stage this tall
+     that swallowed the plain wheel would be a hole the reader's scroll falls into
+     halfway down the page. ctrl/⌘ is also what a trackpad pinch sends, so the
+     gesture that means zoom everywhere else means zoom here.
+     0.0012 is measured, not picked: a mouse notch is deltaY ≈ 120, which this
+     turns into 1.15x, so a full sweep of the range is a couple of dozen notches
+     rather than six. */
+  stage.addEventListener('wheel', (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault();
+    const p = at(ev);
+    globe.zoomBy(Math.exp(-ev.deltaY * 0.0012), p.x, p.y);
+  }, { passive: false });
+
+  /* ★ AND THE KEYBOARD, which the hero never had. The stage is focusable, so it
+     has to do something once it is focused — arrows turn, +/− zoom, 0 resets, and
+     Enter opens whatever is nearest the middle. Otherwise a tab stop that swallows
+     the arrow keys and gives nothing back is worse than no tab stop at all. */
+  stage.addEventListener('keydown', (ev) => {
+    const step = ev.shiftKey ? 60 : 18;
+    let used = true;
+    if (ev.key === 'ArrowLeft') globe.turnBy(step, 0);
+    else if (ev.key === 'ArrowRight') globe.turnBy(-step, 0);
+    else if (ev.key === 'ArrowUp') globe.turnBy(0, -step);
+    else if (ev.key === 'ArrowDown') globe.turnBy(0, step);
+    else if (ev.key === '+' || ev.key === '=') globe.zoomBy(1.3, stage.clientWidth / 2, stage.clientHeight / 2);
+    else if (ev.key === '-' || ev.key === '_') globe.zoomBy(1 / 1.3, stage.clientWidth / 2, stage.clientHeight / 2);
+    else if (ev.key === '0') globe.resetView();
+    else used = false;
+    if (used) { ev.preventDefault(); host.classList.add('is-moved'); syncChrome(); }
+  });
+
+  /* ------------------------------------------------- the list, and finding one */
+  const listEl = $('#atlas-list'), filterEl = $('#atlas-filters'), searchEl = $('#atlas-search');
+  const types = [...new Set(rows.map(r => r.type))];
+  const off = new Set();                       // disciplines currently switched OFF
+
+  filterEl.innerHTML = types.map(t =>
+    `<button type="button" data-type="${esc(t)}" aria-pressed="true">${esc(DISCIPLINE[t] || t)}</button>`
+  ).join('');
+
+  function visible() {
+    const q = searchEl.value.trim().toLowerCase();
+    return rows.filter(r =>
+      !off.has(r.type) &&
+      (!q || r.name.toLowerCase().includes(q) || (r.city || '').toLowerCase().includes(q)));
+  }
+
+  function renderList() {
+    const list = visible();
+    listEl.innerHTML = list.length ? list.map(r => `
+      <button class="atlas-row" type="button" role="option" aria-selected="false"
+              data-row="${esc(r.id)}" style="--k:var(${HUE[r.type] || '--accent'})">
+        <span class="dot"></span>
+        <span class="nm">${esc(r.name)}</span>
+        <span class="cy">${esc(r.ranked ? (r.city || '') : 'PLOTTED')}</span>
+      </button>`).join('')
+      : '<p class="atlas-empty">Nothing by that name. The atlas holds every circuit ' +
+        'in §02 and §04 — try a town instead.</p>';
+    /* the pin set follows the filters, so what is on the globe and what is in the
+       list are the same answer to the same question and cannot drift apart */
+    globe.setPins(list.map(r => ({
+      id: r.id, lat: r.lat, lon: r.lon, color: r.accent,
+      event: r.event, ranked: r.ranked, next: r.next, label: r.label,
+    })), HOME);
+  }
+
+  filterEl.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-type]');
+    if (!b) return;
+    const t = b.dataset.type;
+    off.has(t) ? off.delete(t) : off.add(t);
+    b.setAttribute('aria-pressed', String(!off.has(t)));
+    renderList();
+  });
+
+  searchEl.addEventListener('input', renderList);
+
+  listEl.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-row]');
+    if (!b) return;
+    const r = byId.get(b.dataset.row);
+    if (!r) return;
+    for (const o of listEl.querySelectorAll('[data-row]')) o.setAttribute('aria-selected', 'false');
+    b.setAttribute('aria-selected', 'true');
+    globe.focus(r.id);
+    globe.goTo(r.lat, r.lon);
+    host.classList.add('is-moved');
+    syncChrome();
+  });
+
+  /* a second press on the row already selected opens it — one press to find it on
+     the globe, one to read it, which is the same two-step §04's cells are not
+     asked to make because they are not also a map */
+  listEl.addEventListener('dblclick', (ev) => {
+    const b = ev.target.closest('[data-row]');
+    const r = b && byId.get(b.dataset.row);
+    if (r?.route) panel.openFrom(r.route, b);
+  });
+
+  renderList();
+  syncChrome();
+
+  return {
+    globe,
+    resize() { globe.resize(); },
+  };
+}
+
 /* ==================================================================== TITLE */
 function splitTitle() {
   const h = $('#hero-title');
@@ -1504,12 +1895,21 @@ function boot() {
    * answers it once during its own construction, so a `const` below this point
    * would be read inside its own temporal dead zone.
    * ---------------------------------------------------------------------- */
-  const gate = { hidden: false, figOff: true };
+  /* ★ AND A THIRD REASON NOW: §03 HOLDS TWO CANVASES AND ONLY ONE MAY RUN.
+     The racing line and the atlas share a chapter and a tab strip, so at any
+     moment one of them is `hidden` — out of the layout, invisible, and with a
+     full-resolution surface pass it would still be paying for every frame. The
+     tab is therefore part of the gate rather than only a class on a div: both are
+     off when the chapter is away, and exactly one is on when it is here. */
+  let atlas = null;
+  const gate = { hidden: false, figOff: true, tab: 'line' };
   const applyGates = () => {
     const awake = !gate.hidden;
     awake ? stars.resume() : stars.pause();
     awake ? globe.resume() : globe.pause();
-    (awake && !gate.figOff) ? fig.resume() : fig.pause();
+    const near = awake && !gate.figOff;
+    (near && gate.tab === 'line') ? fig.resume() : fig.pause();
+    if (atlas) (near && gate.tab === 'atlas') ? atlas.globe.resume() : atlas.globe.pause();
   };
 
   const chapterNav = initChapterNav();
@@ -1534,13 +1934,11 @@ function boot() {
       if (id === 'catalogue') globe.lookAt(62, 17, { hold: 1200, settled: true });
       chapterNav.mark(id);
     },
-    onGlobeDim: (v) => {
-      globe.setDim(v);
-      // pins are only clickable while the globe is the hero's subject. Past that
-      // it is a fixed layer at z-index 1 lying over §02 and §04, and making it
-      // hit-testable there would eat clicks meant for the page.
-      document.body.classList.toggle('globe-hot', v > 0.55);
-    },
+    /* Only the paint budget now. `body.globe-hot` used to be toggled here too, to
+       make the disc hit-testable while it was the hero's subject; the hero's
+       planet is not a control any more, so there is nothing to switch on and
+       nothing downstream that reads the class. See the note in app.css. */
+    onGlobeDim: (v) => globe.setDim(v),
     // the reader is moving: a dimmed globe stops repainting until they stop, so
     // its compositor cost is off the scroll's frame budget. See globe.setBusy().
     onBusy: (v) => { globe.setBusy(v); stars.setBusy(v); },
@@ -1681,6 +2079,18 @@ function boot() {
     if (act === 'adopt-these') { adopt(kit().items); panel.refresh(); renderKit(); return; }
     if (act === 'adopt-empty') { adopt([]); panel.refresh(); renderKit(); return; }
 
+    /* ★ ONE PRESS, EVEN FROM THE READ-ONLY STATE. addFromCatalogue() adopts the
+       list already on screen first if it has to — see the note over it in
+       js/gear.js. The alternative was making the reader press ADOPT, read a
+       paragraph about Field Atlas 1.x and then find their place in the shelf
+       again, which is ceremony rather than consent. Nothing appears or disappears
+       at that moment; the only visible change is the thing they asked for. */
+    if (act === 'offer') {
+      addFromCatalogue(el.dataset.offer, kit().items);
+      panel.refresh(); renderKit();
+      return;
+    }
+
     const id = idOf(el);
     if (!id) return;
     const item = kit().items.find(i => i.id === id);
@@ -1718,215 +2128,67 @@ function boot() {
     panel.refresh();
   });
 
-  /* ====================================================== THE GLOBE, IN HAND
-   * ★ TURN IT, ZOOM IT, AND PRESS WHAT YOU FIND.
-   *
-   * Theodor: "if I have my thumb on the globe I could zoom in on it, just to get
-   * closer to Sweden and where all the tracks are, and then press them."
-   *
-   * The pressing half was WRITTEN two sessions ago and has never once run. The
-   * handlers below have always been here and `body.globe-hot` has always been
-   * toggled, but no stylesheet rule ever consumed that class — so `pointer-events:
-   * none` on #globe-wrap inherited straight through to the canvas and every event
-   * went to the page behind it. Nothing threw and the cursor never changed, which
-   * is exactly why it survived. The rule is in app.css now, beside a note saying
-   * what it is for.
-   *
-   * The canvas is still inert everywhere but the hero, and that part of the old
-   * comment was right: it is a fixed layer at z-index 1, and awake below the hero
-   * it would sit on top of §02's entries and §04's cells and eat their clicks.
-   *
-   * ★ THE PAGE KEEPS THE VERTICAL SCROLL, WHICHEVER GESTURE WINS. `touch-action:
-   * pan-y` hands the browser every vertical drag before this code sees it, which
-   * matters most on a phone, where the disc lies under the hero copy and a reader
-   * flicking upward is scrolling, not turning the Earth. What is left for us is
-   * the horizontal drag, the two-finger pinch, and the tap.
-   *
-   * ★ THE LISTENERS ARE ON #globe-hit, NOT ON THE CANVAS. The disc has to be
-   * painted UNDER #scrim and hit ABOVE `main`, and no single element can be both —
-   * see the long note in app.css. #globe-hit is an empty box in exactly the same
-   * place, so its rect and the canvas's are interchangeable; the canvas is still
-   * what the panel is opened FROM, because that is what the reader pressed.
-   * ===================================================================== */
-  const globeCanvas = $('#globe');
-  const globeHit = $('#globe-hit');
-  const canvasXY = (ev) => {
-    const r = globeHit.getBoundingClientRect();
-    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
-  };
-  const pinAt = (ev) => {
-    const p = canvasXY(ev);
-    return globe.hitTest(p.x, p.y, 16);
-  };
-  const openPin = (pin) => {
-    const e0 = EVENTS.find(x => x.venue.id === pin.id);
-    panel.openFrom(e0 ? 'date/' + e0.key : 'circuit/' + pin.id, globeCanvas);
-  };
+  /* ================================================ §03's TWO INSTRUMENTS
+   * ★ THE ATLAS IS BUILT LAZILY, AND THAT IS NOT AN OPTIMISATION FOR ITS OWN SAKE.
+   * createGlobe() allocates a surface canvas, an ImageData and the whole geometry
+   * cache, and it does it on the reader's very first frame if it is called at
+   * boot — competing with the hero's own globe, the starfield, the relief bake and
+   * the fonts, all for a stage that is three screens down and may never be opened.
+   * So the tab builds it the first time it is chosen, and the strip works from the
+   * first paint either way because the racing line is the default.
+   * ==================================================================== */
+  const tabs = [...document.querySelectorAll('[data-figtab]')];
+  const panes = { line: $('#pane-line'), atlas: $('#pane-atlas') };
 
-  /* ★ TWO INPUT PATHS, AND THE SPLIT IS FORCED BY `touch-action: pan-y`.
-   *
-   * Pointer events are the modern answer and they handle the mouse, the pen and a
-   * single finger perfectly. They do NOT handle the pinch here, and it took a
-   * failing test to find out why: while `touch-action` still permits the browser a
-   * gesture of its own, Chrome hands the page only the FIRST touch point as a
-   * pointer — measured, a genuine two-finger spread on the disc produced exactly
-   * one `pointerdown` and one stream of `pointermove`. The second thumb never
-   * arrived, so nothing could tell a pinch from a drag.
-   *
-   * The fix is not `touch-action: none`. That would deliver every pointer, and it
-   * would also take vertical scrolling away from a finger anywhere on the disc —
-   * which on a phone is most of the hero, and is the one thing a reader is more
-   * likely to want than zooming. The legacy Touch Events API has no such problem:
-   * `ev.touches` carries every contact regardless, as the same measurement showed.
-   *
-   * So: POINTERS turn and tap, TOUCHES pinch, and `pinching` keeps them out of
-   * each other's way. Two paths for two jobs rather than one path doing neither.
-   */
-  const down = new Map();               // live pointers, for the turn
-  let moved = 0, downAt = 0, turning = false, pinching = false, pinchSpan = 0;
-
-  const spanOf = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
-
-  globeHit.addEventListener('pointerdown', (ev) => {
-    down.set(ev.pointerId, canvasXY(ev));
-    globeHit.setPointerCapture(ev.pointerId);
-    globe.setGesture(true);
-    moved = 0; downAt = performance.now(); turning = false;
-  });
-
-  globeHit.addEventListener('pointermove', (ev) => {
-    if (!down.has(ev.pointerId)) {
-      // not a drag — just the mouse passing over. Say what is pressable.
-      globeHit.style.cursor = pinAt(ev) ? 'pointer' : '';
-      return;
+  function showTab(which, focus) {
+    const want = panes[which] ? which : 'line';
+    gate.tab = want;
+    for (const t of tabs) {
+      const on = t.dataset.figtab === want;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      if (on && focus) t.focus();
     }
-    const p = canvasXY(ev);
-    const prev = down.get(ev.pointerId);
-    down.set(ev.pointerId, p);
-    if (pinching) { moved = 99; return; }        // the touch path has this gesture
-
-    const dx = p.x - prev.x, dy = p.y - prev.y;
-    moved += Math.hypot(dx, dy);
-    /* ★ A few pixels of slop before this becomes a turn. A tap on a pin is never
-       perfectly still — least of all a thumb on a phone — and treating the first
-       stray pixel as a drag would spin the planet a degree away from whatever the
-       reader was trying to press, every time. */
-    if (moved > 5) {
-      turning = true;
-      document.body.classList.add('globe-turning');
-      globe.turnBy(dx, dy);
+    for (const k of Object.keys(panes)) panes[k].hidden = k !== want;
+    $('#anatomy-sub').textContent = want === 'atlas'
+      ? 'THE ATLAS · EVERY CIRCUIT, PLOTTED'
+      : 'RACING LINE · LIVE INTEGRATION';
+    if (want === 'atlas' && !atlas) {
+      atlas = mountAtlas(panel);
+      /* ★ a canvas born after the MOTION pill was last pressed has not heard it.
+         Read from the body class rather than from a captured variable, because
+         that class IS the page's answer — see the note over applyMotion(). */
+      if (atlas) atlas.globe.setMotion(!document.body.classList.contains('no-motion'));
     }
-  });
-
-  const endPointer = (ev) => {
-    if (!down.has(ev.pointerId)) return;
-    down.delete(ev.pointerId);
-    if (down.size) return;
-    globe.setGesture(false);
-    document.body.classList.remove('globe-turning');
-    /* A tap is a press that went nowhere and did not linger. `click` is not usable
-       here: pointer capture plus a cancelled touch means it does not fire
-       reliably, and it would fire at the end of a drag as well. */
-    if (ev.type === 'pointerup' && !turning && !pinching && moved <= 5 &&
-        performance.now() - downAt < 600) {
-      const pin = pinAt(ev);
-      if (pin) openPin(pin);
-    }
-    turning = false;
-  };
-  globeHit.addEventListener('pointerup', endPointer);
-  globeHit.addEventListener('pointercancel', endPointer);
-
-  /* -- the pinch, from touch events, for the reason set out above -------------- */
-  globeHit.addEventListener('touchstart', (ev) => {
-    if (ev.touches.length < 2) return;
-    pinching = true;
-    pinchSpan = spanOf(ev.touches);
-    globe.setGesture(true);
-  }, { passive: true });
-
-  globeHit.addEventListener('touchmove', (ev) => {
-    if (ev.touches.length < 2) return;
-    /* Not passive, and it must not be: two fingers spreading is this canvas's
-       gesture, and without claiming it the page can still decide halfway through
-       that it was a scroll. `touch-action: pan-y` has already told the browser
-       that much; this is the same statement for the gesture actually in progress. */
-    ev.preventDefault();
-    const span = spanOf(ev.touches);
-    if (pinchSpan > 8 && span > 8) {
-      const r = globeHit.getBoundingClientRect();
-      globe.zoomBy(span / pinchSpan,
-        (ev.touches[0].clientX + ev.touches[1].clientX) / 2 - r.left,
-        (ev.touches[0].clientY + ev.touches[1].clientY) / 2 - r.top);
-    }
-    pinchSpan = span;
-  }, { passive: false });
-
-  const endPinch = (ev) => {
-    if (!pinching) return;
-    // one finger lifting out of a pinch re-baselines rather than snapping
-    if (ev.touches.length >= 2) { pinchSpan = spanOf(ev.touches); return; }
-    if (ev.touches.length) return;
-    pinching = false;
-    if (!down.size) globe.setGesture(false);
-  };
-  globeHit.addEventListener('touchend', endPinch);
-  globeHit.addEventListener('touchcancel', endPinch);
-
-  /* ★ HELD BEHIND A MODIFIER, exactly as §03's stage is — see the note over
-     `wheelNeedsMod` in js/layout3d.js. The globe is fixed and covers a third of
-     the hero; swallowing the plain wheel there would turn the first screen of the
-     site into somewhere the reader's scroll stops working. ctrl/⌘ is also what a
-     trackpad pinch sends, so the gesture that means zoom everywhere else means
-     zoom here too, and everything else goes to the page. */
-  globeHit.addEventListener('wheel', (ev) => {
-    if (!(ev.ctrlKey || ev.metaKey)) return;
-    ev.preventDefault();
-    const p = canvasXY(ev);
-    /* ★ 0.0012, measured rather than picked: a mouse notch is deltaY ≈ 120, which
-       this turns into 1.15x, so the full 1x–4.2x range is about ten notches. The
-       first draft ran at 0.004 and crossed the entire range in six, which is not a
-       zoom, it is a switch. A trackpad's pinch arrives as many small deltas and
-       lands in the same place because the response is exponential in the delta. */
-    globe.zoomBy(Math.exp(-ev.deltaY * 0.0012), p.x, p.y);
-  }, { passive: false });
-
-  /* --- the globe's own chrome: a hint, and a way back out --------------------
-   * The hint is the entire discoverability story for this feature — a canvas
-   * cannot advertise itself, and nobody pinches a background image on the off
-   * chance. It names the gesture the device can actually do, and it goes away for
-   * good once the reader has used it, because at that point it is only clutter.
-   * RESET VIEW appears only when there is something to reset. */
-  const globeUI = $('#globe-ui');
-  const globeHint = $('#globe-hint');
-  const coarse = window.matchMedia('(pointer: coarse)').matches;
-  globeHint.textContent = coarse
-    ? 'DRAG TO TURN · PINCH TO ZOOM'
-    : 'DRAG TO TURN · CTRL-SCROLL TO ZOOM';
-  let hintUsed = false;
-  try { hintUsed = localStorage.getItem('fa2.globeHint') === 'done'; } catch {}
-  if (hintUsed) globeHint.hidden = true;
-
-  function syncGlobeUI() {
-    const z = globe.zoom();
-    document.body.classList.toggle('globe-zoomed', z > 1.02);
-    if (!hintUsed && z > 1.02) {
-      hintUsed = true;
-      globeHint.hidden = true;
-      try { localStorage.setItem('fa2.globeHint', 'done'); } catch {}
-    }
+    /* the stage has just come out of `display: none`, so it had no size to
+       measure until this moment — both canvases need telling */
+    if (want === 'atlas' && atlas) atlas.resize();
+    if (want === 'line') { layoutFigure(fig); }
+    applyGates();
+    scroll.refresh();
+    try { localStorage.setItem('fa2.figTab', want); } catch {}
   }
-  $('#globe-reset').addEventListener('click', () => globe.resetView());
-  /* ★ Assigned here rather than passed to createGlobe(), and that is not fussiness:
-     the globe is built long before this block, and a callback handed over at
-     construction could fire — setDim() resets the zoom, and a deep link boots the
-     page already scrolled — while `globeUI` and `hintUsed` are still inside their
-     own temporal dead zone. Attaching it once everything it touches exists is one
-     line and cannot be got wrong later. The globe calls it whenever the TARGET
-     zoom moves, which covers the reader's own gestures and the automatic reset on
-     leaving the hero, and costs nothing when nobody is zooming. */
-  globe.onZoom = syncGlobeUI;
-  syncGlobeUI();
+
+  for (const t of tabs) {
+    t.addEventListener('click', () => showTab(t.dataset.figtab));
+    /* left/right move between tabs, which is what a tablist is required to do and
+       is the only reason the inactive one carries tabIndex -1 above */
+    t.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+      ev.preventDefault();
+      const i = tabs.indexOf(t);
+      showTab(tabs[(i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length].dataset.figtab, true);
+    });
+  }
+
+  /* ★ A REMEMBERED CHOICE IS RESTORED, BUT NEVER ON A DEEP LINK INTO §03.
+     Landing on #anatomy from a shared URL should show what the link is about, and
+     what the chapter is titled after is the racing line. A reader who chose the
+     atlas last time and then arrives by scrolling gets the atlas. */
+  let wantTab = 'line';
+  try { wantTab = localStorage.getItem('fa2.figTab') || 'line'; } catch {}
+  if (location.hash.slice(1) === 'anatomy') wantTab = 'line';
+  if (wantTab === 'atlas') showTab('atlas');
 
   /* --- the ticking bits: hero readout, rails, per-entry countdowns --- */
   const cdNodes = [...document.querySelectorAll('[data-cd]')];
@@ -2010,6 +2272,13 @@ function boot() {
     document.body.classList.toggle('no-motion', !motion);
     motionPill.setAttribute('aria-pressed', String(motion));
     stars.setMotion(motion); globe.setMotion(motion);
+    /* ★ AND THE ATLAS, WHICH IS A THIRD CANVAS THE PILL HAS TO REACH. It is built
+       lazily, so it may not exist when this first runs — and showTab() is not a
+       place to remember to repeat this, so the pill is re-applied there instead of
+       the atlas being special-cased here. A canvas that goes on drifting after
+       MOTION is pressed is the pill lying, which is the one thing §4b of the suite
+       exists to stop happening again. */
+    if (atlas) atlas.globe.setMotion(motion);
     fig.setMotion(motion); scroll.setMotion(motion);
   };
   motionPill.addEventListener('click', () => {
@@ -2042,7 +2311,11 @@ function boot() {
     clearTimeout(rt);
     // layoutFigure(), not fig.resize(): every term in the stage's height is a
     // length, so a width change re-derives the pose before the canvas is re-fitted
-    rt = setTimeout(() => { stars.resize(); globe.resize(); layoutFigure(fig); scroll.refresh(); }, 120);
+    rt = setTimeout(() => {
+      stars.resize(); globe.resize(); layoutFigure(fig);
+      if (atlas) atlas.resize();
+      scroll.refresh();
+    }, 120);
   });
   document.addEventListener('visibilitychange', () => {
     gate.hidden = document.hidden;
@@ -2086,6 +2359,17 @@ function boot() {
 
   requestAnimationFrame(() => {
     layoutFigure(fig); globe.resize();
+    if (atlas) atlas.resize();
+    /* ★ AND THE PARALLAX IS PUT ON BEFORE ANYTHING IS SHOWN, which is the second
+       half of "sometimes it spawns in the middle of the screen".
+       initScroll() ends in remeasure(), so the transform is correct from the
+       moment it is constructed — but on a RESTORED scroll position the browser
+       restores the offset after the first paint, and the disc arrived at its
+       unscrolled resting place, full size, then jumped to a 0.54 scale twelve vmin
+       across as the first scroll frame landed. One synchronous refresh here, under
+       the same rAF that lights the page, resolves it to the position the scroll
+       position actually implies before the reader is shown anything. */
+    scroll.refresh();
     document.body.classList.add('lit');
     panel.sync();          // honour #date/… or #circuit/… already in the URL
     aim();

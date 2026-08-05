@@ -242,8 +242,86 @@ const MAX_TURN = 34;
  * around the equator is 1 024 across the visible hemisphere, and the raster is
  * capped at the same figure (see RASTER_MAX), so beyond about 2x the disc is
  * magnifying a fixed number of texels however big it gets. 4.2x is where that is
- * still an honest picture of Scandinavia rather than a soft one. */
+ * still an honest picture of Scandinavia rather than a soft one.
+ *
+ * ★ THESE ARE DEFAULTS NOW, NOT THE LAW, and §03's atlas overrides both. The
+ * ceiling above is the HERO's ceiling and it was derived from the hero's job: eight
+ * pins, pressable, behind a page of type. The atlas stage is the tool — it is a box
+ * the reader opened on purpose, with the whole catalogue on it — so it runs to
+ * ATLAS_ZOOM_MAX, and what stops it going further is no longer the pins but the
+ * plate. Past that the surface fades to a flat atlas tint and the vector layer
+ * carries the picture; see PLATE_FADE. */
 const ZOOM_MIN = 1, ZOOM_MAX = 4.2;
+
+/* ★ THE MAP IS THE SAME EARTH, UNROLLED, AND IT IS NOT A SECOND RENDERER.
+ *
+ * Theodor: "for the globe itself, make that also a map."
+ *
+ * The temptation is a separate file, and it is a trap: the sun, the terminator,
+ * the twilight ramp and the city lights are two hundred lines of tuned code in
+ * buildLut() and the sample loop, and a second copy of them drifts from the first
+ * the day after it is written. So `mode` splits this file in exactly three places
+ * — the projection, the geometry build, and the chrome around the edge — and
+ * everything between them is shared byte for byte. The map is lit by the same real
+ * sun as the sphere, at the same instant, BY CONSTRUCTION rather than by agreement.
+ *
+ * `zoom` means different things either side of that split and both are honest:
+ * on the sphere it multiplies the disc's radius; on the map it is how many times
+ * the world's width has been divided into the canvas, so zoom 1 is all 360° and
+ * zoom 36 is ten degrees. MAP_ZOOM_MAX is 180 — two degrees of longitude, about
+ * 150 km at Swedish latitudes, which is closer than any circuit needs. */
+const MAP_ZOOM_MIN = 1, MAP_ZOOM_MAX = 180;
+/** what §03's atlas stage runs to — exported so the page does not re-guess it */
+export const ATLAS_ZOOM_MAX = 40;
+
+/* ★ WHERE THE IMAGERY RUNS OUT, IN TEXELS OF PLATE PER SCREEN PIXEL.
+ *
+ * 2 048 texels of longitude is 5.7 to the degree, and no amount of zoom invents a
+ * sixth. Past this the honest move is not to magnify a photograph — that is the
+ * blur — but to stop pretending there is one: the surface cross-fades toward the
+ * flat land/sea tint it is already carrying, and the coastline, the graticule and
+ * the pins, all of them struck at full resolution, carry the picture instead. The
+ * deep view then reads SHARPER than the shallow one, which is the correct outcome
+ * and the opposite of what magnifying would give. It is also just the house style:
+ * this is an atlas, and an atlas plate at survey scale is line work.
+ *
+ * ★ THE NUMBERS ARE THE HERO'S, MEASURED, so §00 can never be caught by this.
+ * Orthographic compresses toward the limb, so the CENTRE of the disc is the
+ * magnified part: at the sub-camera point one device pixel spans
+ * `PLATE_W / (2π · r · dpr)` texels, which on the hero disc is 0.64 — a 1.55x
+ * magnification, and the sharpest the page has ever been. So the fade may not
+ * begin anywhere near there. It starts at 0.33 (3x magnified, where bilinear
+ * starts to show) and is complete at 0.14 (7x, where there is nothing left to
+ * show), which puts the hero a full octave clear of it at zoom 1 and leaves §00
+ * pixel-identical.
+ *
+ * ★ AND IT NEVER QUITE GOES ALL THE WAY. 0.92 rather than 1, so a trace of the
+ * real surface is still under the plate tone and it does not read as a missing
+ * texture. The tonal SHAPE is not what this leaves behind — PLATE_RELIEF puts
+ * that back deliberately, from the same sample — this is only the last few per
+ * cent of the photograph, which stops the flat tones looking printed on. */
+const PLATE_FADE_HI = 0.33, PLATE_FADE_LO = 0.14, PLATE_FADE_MAX = 0.92;
+
+/* ★ WHAT IT FADES TO IS TWO TONES, NOT ONE, AND THE FIRST ATTEMPT PROVED WHY.
+ *
+ * Pulling the sample toward its own luminance was the obvious move and it did not
+ * work: desaturating a blurred photograph gives a blurred grey photograph. What
+ * makes magnified imagery read as mush is not its colour, it is that every edge in
+ * it is four texels wide — so the fix has to REPLACE the picture, not tint it.
+ *
+ * These are the two facts a survey plate actually needs: this is land, that is
+ * sea. The sample decides which by its own blue dominance — the baked plate's
+ * ocean is the only thing on it that is decisively blue — and the answer is a flat
+ * tone, plus a quarter of the relief's own tonal variation so mountains and shelf
+ * still register as shape rather than the whole thing going dead. Struck over the
+ * top, the coastline and the graticule are then the only sharp things on screen,
+ * which is exactly what an atlas at survey scale looks like.
+ *
+ * Both themes, because the day side is not an inverted night side anywhere else on
+ * this page and is not here either. */
+const PLATE_LAND = { night: [56, 50, 40], day: [214, 203, 178] };
+const PLATE_SEA = { night: [17, 27, 40], day: [186, 199, 212] };
+const PLATE_RELIEF = 0.26;      // how much of the sample's own tone survives
 
 /* Above this wrapper opacity the globe is the SUBJECT; below it, it is a backdrop
    behind the chapters. Two things read it — whether the idle drift runs at all,
@@ -251,6 +329,27 @@ const ZOOM_MIN = 1, ZOOM_MAX = 4.2;
    camera can accumulate motion in a state where it is never allowed to spend it.
    See the drift gate in frame() and `settled` in lookAt(). */
 const DRIFT_DIM = 0.5;
+
+/* ★ THE PLANET ARRIVES ONCE, RATHER THAN TWICE.
+ *
+ * Theodor: "make the spawning or the load-in of the globe consistent and higher
+ * quality."
+ *
+ * Part of that was where it lands, which is app.css's problem and is fixed there.
+ * This is the other part, and it is a sequencing bug rather than a layout one:
+ * js/earth.js bakes the relief plate out of three images that are still decoding
+ * when the first frame goes out, so buildSurface() painted a plain unlit sphere —
+ * see the `!px` branch — and then, a few hundred milliseconds later, the real
+ * Earth replaced it in one frame. Two arrivals, the first of them wrong, and on a
+ * slow connection the gap is long enough to look like a bug rather than a load.
+ *
+ * So nothing is shown until there is something true to show. The disc is
+ * composited through `warm`, which stays at 0 until the plate is ready and then
+ * eases in over WARM_MS. FALLBACK_MS is the safety catch: a bake that fails
+ * outright (a tainted canvas — see loadPlate()) must still give the reader a
+ * planet, so the fade starts anyway and what arrives is the honest flat sphere.
+ */
+const WARM_MS = 420, WARM_FALLBACK_MS = 900;
 
 /* ============================================================ THE POINT CACHE
  * A point's latitude and longitude never change — only the camera does. So each
@@ -267,12 +366,23 @@ const DRIFT_DIM = 0.5;
 function packRing(pts) {
   const n = pts.length;
   const xyz = new Float32Array(n * 3);
+  /* ★ AND THE DEGREES THEMSELVES, FOR THE MAP. The sphere never needs them back —
+     that is the whole point of the packed basis — but an equirectangular plate is
+     linear in lon/lat, so drawing the same coastline flat means reading the angles
+     rather than rotating a vector. Two floats a point against the three already
+     here, and it buys the map the identical outline the globe strokes rather than
+     a second, subtly different one. */
+  const ll = new Float32Array(n * 2);
+  let latMin = 90, latMax = -90;
   let mx = 0, my = 0, mz = 0;
   for (let i = 0; i < n; i++) {
     const lon = pts[i][0] * RAD, lat = pts[i][1] * RAD;
     const cl = Math.cos(lat);
     const a = cl * Math.sin(lon), b = cl * Math.cos(lon), c = Math.sin(lat);
     xyz[i * 3] = a; xyz[i * 3 + 1] = b; xyz[i * 3 + 2] = c;
+    ll[i * 2] = pts[i][0]; ll[i * 2 + 1] = pts[i][1];
+    if (pts[i][1] < latMin) latMin = pts[i][1];
+    if (pts[i][1] > latMax) latMax = pts[i][1];
     mx += a; my += b; mz += c;
   }
   const len = Math.hypot(mx, my, mz);
@@ -287,7 +397,7 @@ function packRing(pts) {
     rho = Math.acos(Math.max(-1, Math.min(1, minDot)));
   }
   return {
-    n, xyz,
+    n, xyz, ll, latMin, latMax,
     capA, capB, capC,
     // a ring is entirely on the far side when cos(camera·cap) < -sin(rho);
     // caps wider than a hemisphere can never be culled, hence the -2 sentinel
@@ -363,6 +473,19 @@ export function createGlobe(canvas, opts = {}) {
     w: 0, h: 0, r0: 0, r: 0, cx: 0, cy: 0, dpr: 1,
     zoom: 1, tZoom: 1,   // eased, and what it is easing toward
     gesture: false,      // a finger or a button is down on the disc right now
+    /* ★ 'globe' or 'map' — see MAP_ZOOM_MAX. The same Earth, the same sun, the
+       same plate; only the projection, the geometry build and the chrome differ. */
+    mode: opts.mode === 'map' ? 'map' : 'globe',
+    /* the ceiling is a property of the INSTANCE, because the hero and the atlas
+       are answering different questions with the same object — see ZOOM_MAX */
+    zMax: opts.zoomMax || ZOOM_MAX,
+    /* pins carry names on the atlas and do not behind the hero, where there is no
+       room and no reason. Deconflicted per frame — see paintLabels(). */
+    labels: !!opts.labels,
+    /* ★ HOW FAR IN THE ARRIVAL IS — see the note over WARM_MS. 0 until the plate
+       has baked, then eased to 1, and the whole canvas is composited through it.
+       This is the second half of "make the load-in consistent and higher quality". */
+    warm: 0,
   };
 
   /* camera trig, recomputed once per frame rather than once per point */
@@ -429,6 +552,66 @@ export function createGlobe(canvas, opts = {}) {
     cost.rung = 0; cost.over = 0; cost.ms = 0;
   }
 
+  /* ---------------------------------------------- the two projections' scales
+   * ★ ONE `zoom` NUMBER, TWO MEANINGS, AND BOTH ARE THE OBVIOUS ONE. See the note
+   * over MAP_ZOOM_MAX. On the sphere it multiplies the radius; on the map it is
+   * how many times the world's 360° has been divided into the canvas width. Every
+   * caller downstream — the pins, the hit test, the ease, the reader's own pinch —
+   * reads these two functions rather than the raw number, so nothing else in the
+   * file has to know which projection it is standing in. */
+  const isMap = () => state.mode === 'map';
+  /** pixels per DEGREE on the flat map */
+  const mppd = () => state.w * state.zoom / 360;
+  const zoomCeiling = () => (isMap() ? MAP_ZOOM_MAX : state.zMax);
+  const zoomFloor = () => (isMap() ? MAP_ZOOM_MIN : ZOOM_MIN);
+
+  /** the camera latitude the map may not pan past, so the plate never leaves the box */
+  function mapLatClamp() {
+    const halfSpan = state.h / 2 / mppd();
+    return Math.max(0, 90 - halfSpan);
+  }
+
+  /* ★ WHAT IS ACTUALLY ON SCREEN, AND WHY THE WHOLE BLUR WAS HERE.
+   *
+   * Theodor: "it's still a bit blurry… especially not when you move it around."
+   *
+   * buildSurface() rastered the ENTIRE disc into an R×R buffer and paint() blitted
+   * it to (cx−r, cy−r, 2r, 2r). At 1x that is right and RASTER_MAX is the plate's
+   * own texel count, so it is exactly right. Zoomed to 4x it is a disaster: the
+   * disc is 3 200 CSS pixels across, three quarters of it is off screen, and the
+   * same 1 024 raster is stretched over all of it — every one of the reader's
+   * pixels magnified four times out of a buffer sized for a picture a quarter that
+   * big. That is the blur, and it is arithmetic rather than taste.
+   *
+   * So the raster covers the INTERSECTION of the disc with the canvas and nothing
+   * else. The window is in disc-normalised units (u right, v up, the limb at ±1)
+   * on the sphere and in degrees on the map, and the same pixel budget then buys
+   * four times the linear resolution at 4x, for nothing.
+   *
+   * ★ AT 1x WITH THE DISC INSIDE THE CANVAS THIS RETURNS EXACTLY [−1,1]², WHICH IS
+   * WHAT IT ALWAYS WAS. The hero cannot regress: it is the same numbers through the
+   * same code. Quantised to a 256th so a sub-pixel drift does not invalidate the
+   * geometry cache every frame — see geo.key.
+   *
+   * ★ IT IS ROUNDED OUTWARD, never to nearest. The window is what the geometry is
+   * built for AND what the result is blitted to, so the two can never disagree —
+   * but a window rounded inward would leave a hairline of unpainted canvas at the
+   * edge of the viewport, which is the one error that would be visible.
+   */
+  const qOut = (v, up) => (up ? Math.ceil(v * 256) : Math.floor(v * 256)) / 256;
+
+  function viewWindow() {
+    if (isMap()) {
+      const ppd = mppd();
+      const dLon = state.w / 2 / ppd, dLat = state.h / 2 / ppd;
+      return { lon0: -dLon, lon1: dLon, lat0: state.lat - dLat, lat1: state.lat + dLat };
+    }
+    const { cx, cy, r, w, h } = state;
+    const u0 = Math.max(-1, qOut((0 - cx) / r, false)), u1 = Math.min(1, qOut((w - cx) / r, true));
+    const v0 = Math.max(-1, qOut((cy - h) / r, false)), v1 = Math.min(1, qOut(cy / r, true));
+    return { u0, u1, v0, v1 };
+  }
+
   /* ================================================= the cached still layer
    * ★ THERE USED TO BE THREE OF THESE AND NOW THERE IS ONE.
    *
@@ -440,7 +623,7 @@ export function createGlobe(canvas, opts = {}) {
    * there now. What is left is genuinely camera-independent: the ring of
    * atmosphere OUTSIDE the limb, which depends only on the radius and the theme.
    * ====================================================================== */
-  const layers = { dirty: true, theme: null, air: null, accent: '', ink: '' };
+  const layers = { dirty: true, theme: null, air: null, accent: '', ink: '', mono: '' };
 
   function makeLayer() {
     const c = document.createElement('canvas');
@@ -475,6 +658,8 @@ export function createGlobe(canvas, opts = {}) {
     // getPropertyValue forces a style read, so the tokens are cached here too
     layers.accent = tok('--accent', '#c9974f');
     layers.ink = tok('--ink', '#ece5d9');
+    // the pins' names are set in the page's own mono face — see paintLabels()
+    layers.mono = tok('--font-mono', 'ui-monospace, monospace');
     layers.theme = isDay ? 'day' : 'night';
     layers.dirty = false;
     /* the day side runs a different gain and a different plate cost — re-measure
@@ -514,7 +699,12 @@ export function createGlobe(canvas, opts = {}) {
    * and rejecting a fifth of it — and the inner loop then has no branch in it at
    * all except the plate sample.
    * ==================================================================== */
-  const surf = { c: null, g: null, img: null, size: 0 };
+  const surf = { c: null, g: null, img: null, gw: 0, gh: 0 };
+
+  /** the window, as a cache key — see buildSurface() */
+  const winKey = (w) => (w.u0 !== undefined
+    ? w.u0 + ',' + w.u1 + ',' + w.v0 + ',' + w.v1
+    : w.lon0.toFixed(4) + ',' + w.lon1.toFixed(4) + ',' + (w.lat1 - w.lat0).toFixed(4));
 
   /* ★ WHAT THIS MACHINE CAN ACTUALLY AFFORD, measured rather than assumed. See
      RASTER_LADDER. `rung` only ever descends; resize() and buildLayers() put it
@@ -533,28 +723,62 @@ export function createGlobe(canvas, opts = {}) {
     } else cost.over = 0;
   }
 
-  function surfaceSize() {
+  /* Is the camera being moved right now, by a hand or by an ease it has not
+     finished. ★ A ZOOM COUNTS, and it did not before: the window is a function of
+     the zoom (see viewWindow()), so an easing pinch invalidates the geometry cache
+     every frame exactly the way an easing latitude does. Left out, the first
+     second of every pinch rebuilt a full-resolution cache per frame. */
+  const isMoving = () => state.gesture ||
+    Math.abs(state.tLat - state.lat) > 0.04 ||
+    Math.abs(state.tZoom - state.zoom) > 0.002;
+
+  /**
+   * How big a buffer to raster the WINDOW into — see viewWindow() for why it is
+   * the window and no longer the whole disc.
+   *
+   * Returns {gw, gh}: the window's own aspect, at device resolution, under
+   * whichever cap applies. Both axes are capped by the same figure, so a wide
+   * short window is not silently given more pixels than a tall one.
+   */
+  function surfaceSize(win) {
+    /* the window's size on screen, in device pixels — what a 1:1 raster would be */
+    const wantW = isMap()
+      ? state.w * state.dpr
+      : (win.u1 - win.u0) * state.r * state.dpr;
+    const wantH = isMap()
+      ? state.h * state.dpr
+      : (win.v1 - win.v0) * state.r * state.dpr;
+
     /* Past the hero the disc is at ~14% opacity behind #scrim, and nobody can see
        a texel there — so it rasters at 200px and the per-pixel cost drops by two
        thirds exactly where it is least worth paying. Above that it is the subject,
        unless the camera's latitude is still easing — see RASTER_MOVING. */
-    if (state.dim < 0.35) return Math.min(200, Math.max(16, Math.round(state.r * 2 * state.dpr)));
-    /* ★ A DRAG COUNTS AS MOVING, and the existing test cannot see one. It reads
-       `tLat - lat`, which is the gap an EASE has left to close — and a drag closes
-       that gap itself every frame, by setting both (see turnBy: direct
-       manipulation, no lag between the finger and the planet). So a hand-turned
-       globe looked stationary to this function, took the full raster, and rebuilt
-       the whole geometry cache — an asin and an atan2 a pixel over 800 000 pixels
-       — inside every frame of the drag. That is the one place on this canvas where
-       a stall is unmissable, because the reader is holding the thing that stalls.
-       Zoomed in, the moving raster is allowed to grow with √zoom: the cost of
-       buildGeo goes as R² so the square root buys real sharpness for a bounded
-       price, and it is capped where that price stops being payable at 30 Hz. */
-    const moving = state.gesture || Math.abs(state.tLat - state.lat) > 0.04;
-    const cap = moving
-      ? Math.min(620, Math.round(RASTER_MOVING * Math.sqrt(state.zoom)))
-      : rasterCeiling();
-    return Math.min(cap, Math.max(16, Math.round(state.r * 2 * state.dpr)));
+    let cap;
+    if (state.dim < 0.35) cap = 200;
+    else if (isMoving()) {
+      /* ★ A DRAG COUNTS AS MOVING, and the existing test cannot see one. It reads
+         `tLat - lat`, which is the gap an EASE has left to close — and a drag closes
+         that gap itself every frame, by setting both (see turnBy: direct
+         manipulation, no lag between the finger and the planet). So a hand-turned
+         globe looked stationary to this function, took the full raster, and rebuilt
+         the whole geometry cache — an asin and an atan2 a pixel over 800 000 pixels
+         — inside every frame of the drag. That is the one place on this canvas where
+         a stall is unmissable, because the reader is holding the thing that stalls.
+
+         ★ AND IT IS TWICE WHAT IT WAS, because the buffer it caps is no longer the
+         whole planet. viewWindow() cut the rastered area to what is on screen, so
+         at any zoom past 1 the same figure now buys several times the resolution it
+         used to — a drag on the atlas stage is sharp where a drag on the hero was
+         soft, out of the same budget. The ladder still measures the result: a
+         machine that cannot hold it walks down and stays down. */
+      cap = Math.min(760, Math.round(RASTER_MOVING * 2 * Math.sqrt(state.zoom)));
+    } else cap = rasterCeiling();
+
+    const k = Math.min(1, cap / Math.max(1, Math.max(wantW, wantH)));
+    return {
+      gw: Math.max(16, Math.round(wantW * k)),
+      gh: Math.max(16, Math.round(wantH * k)),
+    };
   }
 
   /* ======================================================= GEO — THE CACHE
@@ -614,8 +838,8 @@ export function createGlobe(canvas, opts = {}) {
     nx: null, ny: null, nz: null, fx: null, fy: null, al: null,
   };
 
-  function buildGeo(R) {
-    const cap = R * R;
+  function buildGeo(gw, gh, win) {
+    const cap = gw * gh;
     if (!geo.idx || geo.idx.length < cap) {
       geo.idx = new Int32Array(cap);
       geo.ty = new Float32Array(cap); geo.xo = new Float32Array(cap);
@@ -623,32 +847,38 @@ export function createGlobe(canvas, opts = {}) {
       geo.fx = new Int16Array(cap); geo.fy = new Int16Array(cap);
       geo.al = new Uint8Array(cap);
     }
+    if (isMap()) return buildGeoMap(gw, gh, win);
+
     const { idx, ty, xo, nx, ny, nz, fx, fy, al } = geo;
-    const half = R / 2, inv = 1 / half;
     const { sLat, cLat } = cam;
     const INV_PI = 1 / Math.PI;
-    /* how many plate texels one raster pixel spans at the sub-camera point, per
-       axis — the scale the footprint below is measured against. See FOOTPRINT. */
-    const pxU = 2 / R, texX = PLATE_W / TAU, texY = PLATE_H / Math.PI;
+    /* ★ THE STEP IS THE WINDOW'S NOW, NOT THE DISC'S. It was `2 / R` — the disc
+       spans 2 in u, so a full-disc raster of R pixels stepped by that. The raster
+       covers only what is on screen (see viewWindow()), so the step is the
+       window's own, and at zoom 1 with the whole disc visible the window IS
+       [−1,1]² and this is `2 / R` again, exactly. */
+    const du = (win.u1 - win.u0) / gw, dv = (win.v1 - win.v0) / gh;
+    const dr = (du + dv) / 2;                    // for the limb coverage, in pixels
+    const texX = PLATE_W / TAU, texY = PLATE_H / Math.PI;
 
     let k = 0;
-    for (let py = 0; py < R; py++) {
-      const v = -((py + 0.5) - half) * inv;
+    for (let py = 0; py < gh; py++) {
+      const v = win.v1 - (py + 0.5) * dv;
       const vv = 1 - v * v;
       /* ★ ONE TEXEL PAST THE LIMB, ON PURPOSE — this row bound and the coverage
          below are the antialiasing. The old loop tested `w² > 0` and skipped
          everything else, which gives the disc a hard edge on the RASTER and then
          scales it up: a stair-stepped limb, plus a dark fringe where the scaler
          blended opaque pixels against transparent black. */
-      if (vv <= -2 * inv) continue;
+      if (vv <= -2 * dv) continue;
       const span = Math.sqrt(Math.max(0, vv));
-      const x0 = Math.max(0, Math.ceil(half - span * half - 1.5));
-      const x1 = Math.min(R - 1, Math.floor(half + span * half + 0.5));
+      const x0 = Math.max(0, Math.ceil((-span - win.u0) / du - 2));
+      const x1 = Math.min(gw - 1, Math.floor((span - win.u0) / du + 1));
       // the parts of the unprojection that do not vary along the row
       const vLat = v * cLat, vDen = -v * sLat;
 
       for (let pxi = x0; pxi <= x1; pxi++) {
-        const u = ((pxi + 0.5) - half) * inv;
+        const u = win.u0 + (pxi + 0.5) * du;
         const w2 = 1 - u * u - v * v;
         // outside the limb the normal is edge-on rather than undefined; clamping
         // w to 0 keeps the unprojection valid right up to the silhouette
@@ -656,7 +886,7 @@ export function createGlobe(canvas, opts = {}) {
         /* coverage: how far inside the limb this texel sits, in texels, offset so
            a texel centred exactly ON the limb is half covered. `1 − w²` is `u² +
            v²`, so its root is the radius — no extra work to get it. */
-        const cov = (1 - Math.sqrt(1 - w2)) / inv + 0.5;
+        const cov = (1 - Math.sqrt(1 - w2)) / dr + 0.5;
         if (cov <= 0) continue;
 
         const lat = Math.asin(w * sLat + vLat);
@@ -704,8 +934,13 @@ export function createGlobe(canvas, opts = {}) {
           const dLonU = (B + A * cLat * u * iw) / c2;           // ∂lon/∂u
           const dLonV = A * (cLat * v * iw + sLat) / c2;        // ∂lon/∂v
 
-          const fxT = pxU * texX * Math.hypot(dLonU, dLonV);
-          const fyT = pxU * texY * Math.hypot(dLatU, dLatV);
+          /* ★ THE TWO STEPS ARE SEPARATE, and at zoom 1 they are the same number.
+             The window can be any shape the viewport is, so a pixel is du wide and
+             dv tall rather than 2/R square, and each derivative is weighted by the
+             step it belongs to. Put du = dv = 2/R back in and this is the
+             expression it replaced, term for term. */
+          const fxT = texX * Math.hypot(dLonU * du, dLonV * dv);
+          const fyT = texY * Math.hypot(dLatU * du, dLatV * dv);
           const sec = 1 / cp;                        // what the prefilter left in x
           ex = Math.sqrt(Math.max(0, fxT * fxT - sec * sec)) / 2;
           ey = Math.sqrt(Math.max(0, fyT * fyT - 1)) / 2;
@@ -715,12 +950,77 @@ export function createGlobe(canvas, opts = {}) {
         const exq = ex < 0.5 ? 0 : Math.min(F_MAX, Math.round(ex * F16));
         const eyq = ey < 0.5 ? 0 : Math.min(F_MAX, Math.round(ey * F16));
 
-        idx[k] = (py * R + pxi) * 4;
+        idx[k] = (py * gw + pxi) * 4;
         ty[k] = (0.5 - lat * INV_PI) * PLATE_H;
         xo[k] = (lam * INV_PI * 0.5 + 0.5) * PLATE_W;
         nx[k] = u * N16; ny[k] = v * N16; nz[k] = w * N16;
         fx[k] = exq; fy[k] = eyq;
         al[k] = cov >= 1 ? 255 : cov * 255;
+        k++;
+      }
+    }
+    geo.n = k;
+  }
+
+  /* ================================================ THE SAME EARTH, UNROLLED
+   * ★ EVERY ARRAY THIS FILLS IS THE ONE buildGeo() ABOVE FILLS, IN THE SAME UNITS.
+   * That is the entire design of the map: the per-frame sample loop, the LUT, the
+   * plate fetch, the wide tap, the dither and the city lights never learn that the
+   * projection changed, so the map cannot be lit differently from the sphere by
+   * accident — there is only one piece of code that lights anything.
+   *
+   * The normal is written in the SAME camera-space basis setSun() rotates the sun
+   * into, so the Lambert dot product downstream is unchanged. A dot product is
+   * invariant under rotation, so expressing both in the camera's frame gives the
+   * true world answer — and the terminator lands on the map exactly where the
+   * sphere puts it, at the same instant, without a second line of solar maths.
+   *
+   * `xo` holds longitude RELATIVE to the camera and the per-frame loop adds
+   * `lonTex`, exactly as on the sphere — so panning east and west costs nothing
+   * and never rebuilds this. Panning north and south does, because latitude is in
+   * both `ty` and the normal, which is the same bargain the sphere already makes
+   * with its look-ats.
+   * ====================================================================== */
+  function buildGeoMap(gw, gh, win) {
+    const { idx, ty, xo, nx, ny, nz, fx, fy, al } = geo;
+    const { sLat, cLat } = cam;
+    const dLon = (win.lon1 - win.lon0) / gw, dLat = (win.lat1 - win.lat0) / gh;
+    const texX = PLATE_W / TAU, texY = PLATE_H / Math.PI;
+    /* constant over the whole plate: an equirectangular pixel is the same number
+       of texels wide and tall wherever it lands. Only `sec` below varies. */
+    const fxT = texX * dLon * RAD, fyT = texY * dLat * RAD;
+    const eyq0 = (() => {
+      const ey = Math.sqrt(Math.max(0, fyT * fyT - 1)) / 2;
+      return ey < 0.5 ? 0 : Math.min(F_MAX, Math.round(ey * F16));
+    })();
+
+    let k = 0;
+    for (let py = 0; py < gh; py++) {
+      const lat = win.lat1 - (py + 0.5) * dLat;
+      if (lat > 90 || lat < -90) continue;          // past the pole there is no Earth
+      const p = lat * RAD;
+      const cp = Math.cos(p), sp = Math.sin(p);
+      const row = (0.5 - lat / 180) * PLATE_H;
+      /* the x footprint is the plate's own polar prefilter subtracted in
+         quadrature, the same term and for the same reason as on the sphere */
+      const sec = 1 / Math.max(1e-4, Math.abs(cp));
+      const ex = Math.sqrt(Math.max(0, fxT * fxT - sec * sec)) / 2;
+      const exq = ex < 0.5 ? 0 : Math.min(F_MAX, Math.round(ex * F16));
+      const rowOff = py * gw * 4;
+
+      for (let pxi = 0; pxi < gw; pxi++) {
+        const dlon = win.lon0 + (pxi + 0.5) * dLon;
+        const dl = dlon * RAD;
+        const a = cp * Math.sin(dl), P = cp * Math.cos(dl);
+
+        idx[k] = rowOff + pxi * 4;
+        ty[k] = row;
+        xo[k] = (dlon / 360 + 0.5) * PLATE_W;
+        nx[k] = a * N16;
+        ny[k] = (cLat * sp - sLat * P) * N16;
+        nz[k] = (sLat * sp + cLat * P) * N16;
+        fx[k] = exq; fy[k] = eyq0;
+        al[k] = 255;                                // a plate has no limb to feather
         k++;
       }
     }
@@ -749,7 +1049,7 @@ export function createGlobe(canvas, opts = {}) {
     return i < 0 ? 0 : (i > LUT_MAX ? LUT_MAX : i | 0);
   }
 
-  function buildLut(isDay) {
+  function buildLut(isDay, forMap) {
     /* The day theme is not an inverted night theme anywhere else on this page and
        it is not here either — see the note at the end of README.md.
        ★ The DAY side needs MORE contrast between lit and unlit, not less. app.css
@@ -787,38 +1087,75 @@ export function createGlobe(canvas, opts = {}) {
          lights only existed inside a band a few pixels wide and were effectively
          invisible. `dusk` is a second, much wider falloff on the same Lambert
          term, so they come up through the evening the way a city actually does
-         from orbit. With a real sun that band now sweeps Europe every night. */
-      const dusk = L >= 0.30 ? 0 : (L <= -0.10 ? 1 : (0.30 - L) / 0.40);
+         from orbit. With a real sun that band now sweeps Europe every night.
+         ★ AND THEY STOP AT THE TERMINATOR NOW. The upper bound was 0.30, which is
+         seventeen degrees of arc PAST the terminator and well into daylight — so
+         every lit city was also glowing on ground the sun was standing over, which
+         is most of what "the lighting on the dark sides looks weird" is. 0.12 puts
+         the top of the ramp inside the twilight band the terminator itself is
+         drawn over, where a city coming up genuinely is what you would see. */
+      const dusk = L >= 0.12 ? 0 : (L <= -0.10 ? 1 : (0.12 - L) / 0.22);
 
-      lut.sh[i] = ambient + (gain - ambient) * lit;
+      /* ★ THE NIGHT SIDE IS NOT ONE FLAT NUMBER ANY MORE.
+         `ambient` was a constant, so every unlit pixel got exactly the same
+         light — and an unlit OCEAN, which has no hillshade of its own to give it
+         away, came out as a dead slab with a hard edge at the limb. The sphere
+         stopped being a sphere on the half of it that was dark, which is a fair
+         part of "the lighting on the dark sides of the Earth can look weird".
+         `L` on the night side already runs −1 at the antisolar point to 0 at the
+         terminator, so a gentle ramp along it is free: the deep night is a little
+         darker than it was and the hour or two either side of the terminator a
+         little brighter, which is both what an atmosphere actually does with
+         scattered light and what gives the dark half its roundness back. */
+      const dark = 0.74 + 0.26 * Math.min(1, Math.max(0, L + 1));
+      lut.sh[i] = ambient * dark + (gain - ambient * dark) * lit;
       /* Atmosphere: the fresnel toward the limb is per-pixel and stays there; what
          belongs to L is how LIT that part of the limb is, so the bright crescent
-         sits on the day edge wherever the sun has actually put it. */
-      lut.gl[i] = 0.85 * lit;
+         sits on the day edge wherever the sun has actually put it.
+         ★ ZERO ON THE MAP. The fresnel is a function of the surface turning away
+         from the reader, which on a sphere is the limb and on a flat plate is
+         nothing at all — left on, it painted a blue haze down the two meridians
+         ninety degrees from the camera, in the middle of open map. Killed here
+         rather than per pixel, so the map pays nothing for not having a limb. */
+      lut.gl[i] = forMap ? 0 : 0.85 * lit;
       lut.du[i] = dusk * dusk * (2 - dusk) * lampGain * 0.0032;
     }
-    lut.theme = isDay ? 'day' : 'night';
+    lut.theme = (isDay ? 'day' : 'night') + (forMap ? '|map' : '');
   }
 
-  function buildSurface(isDay) {
-    const R = surfaceSize();
-    if (surf.size !== R) {
+  function buildSurface(isDay, win) {
+    const { gw, gh } = surfaceSize(win);
+    if (surf.gw !== gw || surf.gh !== gh) {
       surf.c = document.createElement('canvas');
-      surf.c.width = surf.c.height = R;
+      surf.c.width = gw; surf.c.height = gh;
       surf.g = surf.c.getContext('2d');
-      surf.img = surf.g.createImageData(R, R);
-      surf.size = R;
+      surf.img = surf.g.createImageData(gw, gh);
+      surf.gw = gw; surf.gh = gh;
       geo.key = '';                       // a different raster is different geometry
     }
-    /* ★ Quantised to a tenth of a degree, and the THEME IS NO LONGER IN THE KEY —
-       the shading moved to LUT, so a day/night switch now costs a 1 024-entry
-       table rather than a million unprojections. The cache is invalidated by the
-       camera's LATITUDE and the raster size only, so at the hero, where the
-       latitude is fixed and only the drift runs, it is built once for the life of
-       the page — with a world-fixed sun turning over the top of it. */
-    const key = R + '|' + state.lat.toFixed(1);
-    if (geo.key !== key) { buildGeo(R); geo.key = key; }
-    if (lut.theme !== (isDay ? 'day' : 'night')) buildLut(isDay);
+    /* ★ Quantised, and the THEME IS NO LONGER IN THE KEY — the shading moved to
+       LUT, so a day/night switch now costs a 1 024-entry table rather than a
+       million unprojections. What invalidates it is the camera's LATITUDE, the
+       raster size and the window; at the hero all three are fixed and only the
+       drift runs, so it is built once for the life of the page with a world-fixed
+       sun turning over the top of it.
+
+       ★ THE QUANTUM IS A PIXEL, NOT A TENTH OF A DEGREE, and that is a bug fix
+       rather than a tuning. `state.lat.toFixed(1)` is a tenth of a degree of
+       GROUND, which at the hero is three quarters of a screen pixel and at the
+       atlas stage's 40x is thirty of them — so a cache that was invisible at zoom
+       1 would have left the shaded relief lying up to thirty pixels away from the
+       coastline struck over the top of it. The tolerance that matters is on
+       screen, so that is where it is expressed, and it tightens by itself as the
+       reader leans in. */
+    const latQ = isMap()
+      ? Math.max(1e-5, 0.3 / mppd())
+      : Math.max(1e-5, 0.1 / state.zoom);
+    const key = gw + 'x' + gh + '|' + (Math.round(state.lat / latQ) * latQ).toFixed(5) +
+                '|' + winKey(win);
+    if (geo.key !== key) { buildGeo(gw, gh, win); geo.key = key; }
+    const lutKey = (isDay ? 'day' : 'night') + (isMap() ? '|map' : '');
+    if (lut.theme !== lutKey) buildLut(isDay, isMap());
 
     /* ★ The clock starts AFTER the geometry build, deliberately. buildGeo() is
        amortised — at the hero it runs once for the life of the page — so charging
@@ -829,6 +1166,17 @@ export function createGlobe(canvas, opts = {}) {
 
     const out = surf.img.data;
     out.fill(0);
+
+    /* ★ HOW MUCH PLATE ONE SCREEN PIXEL IS GETTING, in texels, where the picture
+       is most magnified. On the sphere that is the SUB-CAMERA POINT and not the
+       average: orthographic compresses toward the limb, so the centre of the disc
+       is the part being blown up and the limb is the part being squeezed. On the
+       map it is uniform, because a plate carrée is uniform. Everything that has to
+       know how far past its source the imagery has been pushed — the city lights
+       above, the fade below — reads this one number. */
+    const texPerPx = isMap()
+      ? PLATE_W / (state.zoom * state.w * state.dpr)
+      : PLATE_W / (TAU * state.r * state.dpr);
 
     const px = PLATE.px;
     const { n, idx, ty, xo, nx, ny, nz, fx, fy, al } = geo;
@@ -844,10 +1192,31 @@ export function createGlobe(canvas, opts = {}) {
        side that reads as points at 1x reads as fog at 4x, over exactly the ground
        the reader zoomed in to look at. Their apparent area goes as zoom², so
        holding the total light constant would want 1/zoom² and would extinguish
-       them; zoom^-0.75 keeps them plainly lit while handing the terrain back.
-       Folded into the three channel constants, so it costs nothing per pixel. */
-    const lampZ = Math.pow(state.zoom, -0.75);
+       them; ^-0.75 keeps them plainly lit while handing the terrain back.
+       Folded into the three channel constants, so it costs nothing per pixel.
+
+       ★ IT IS KEYED TO THE MAGNIFICATION NOW, NOT TO `zoom`, AND THAT IS A BUG THE
+       WINDOW RASTER WOULD OTHERWISE HAVE INTRODUCED. What has to be compensated is
+       how far the plate is being blown up, and `zoom` was only ever a proxy for
+       that — a good one while the raster covered the whole disc and the two moved
+       together. They no longer do: the map's `zoom` counts divisions of the world,
+       the sphere's multiplies a radius, and the same number means a different
+       magnification in each. `mag` is measured from the plate instead, so one
+       expression is right in both projections and stays right if either scale is
+       ever retuned. */
+    const mag = Math.max(1, PLATE_FADE_HI / Math.max(1e-6, texPerPx));
+    const lampZ = Math.pow(mag, -0.75);
     const nR = 255 * lampZ, nG = 202 * lampZ, nB = 128 * lampZ;
+
+    /* ★ PAST THE PLATE'S OWN DETAIL, STOP PRETENDING THERE IS A PHOTOGRAPH.
+       See PLATE_FADE_HI. Zero at the hero and for the whole of §00 — the branch
+       below is not taken at all there — and it comes up only where the imagery is
+       genuinely being invented, handing the picture to the coastline, the
+       graticule and the pins, all of which are struck at full resolution. */
+    const fadeK = texPerPx >= PLATE_FADE_HI ? 0 : PLATE_FADE_MAX *
+      Math.min(1, (PLATE_FADE_HI - texPerPx) / (PLATE_FADE_HI - PLATE_FADE_LO));
+    const landT = PLATE_LAND[isDay ? 'day' : 'night'];
+    const seaT = PLATE_SEA[isDay ? 'day' : 'night'];
 
     if (!px) {
       // the plate has not baked yet, or could not be read — a plain ocean, so the
@@ -924,12 +1293,29 @@ export function createGlobe(canvas, opts = {}) {
          a run of noise along each row, which is all the eye needs it to be. */
       const d = ((i & 7) - 3.5) * 0.30;
 
-      out[o] = (px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11) * s +
-               120 * g + night * nR + d;
-      out[o + 1] = (px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11) * s +
-                   172 * g + night * nG + d;
-      out[o + 2] = (px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11) * s +
-                   214 * g + night * nB + d;
+      let sr = px[a0] * w00 + px[b0] * w10 + px[a1] * w01 + px[b1] * w11;
+      let sg = px[a0 + 1] * w00 + px[b0 + 1] * w10 + px[a1 + 1] * w01 + px[b1 + 1] * w11;
+      let sb = px[a0 + 2] * w00 + px[b0 + 2] * w10 + px[a1 + 2] * w01 + px[b1 + 2] * w11;
+      /* ★ ONE PREDICTABLE BRANCH, AND AT THE HERO IT IS NEVER TAKEN. See fadeK.
+         Past the plate's own detail the land cover is no longer information, it is
+         four texels smeared over a hundred pixels — so it is pulled toward its own
+         luminance and the tonal shape of the relief is what survives. The picture
+         then comes from the line work over the top, which has no resolution limit
+         at all, and the deep view reads sharper than the shallow one. */
+      if (fadeK !== 0) {
+        /* land or sea, off the sample's own blue dominance — the baked plate's
+           ocean is the one thing on it that is decisively blue, which is the same
+           property js/earth.js's city-light extraction turns on */
+        const t = sb > sr * 1.12 ? seaT : landT;
+        const L = (0.30 * sr + 0.59 * sg + 0.11 * sb - 116) * PLATE_RELIEF;
+        sr += (t[0] + L - sr) * fadeK;
+        sg += (t[1] + L - sg) * fadeK;
+        sb += (t[2] + L - sb) * fadeK;
+      }
+
+      out[o] = sr * s + 120 * g + night * nR + d;
+      out[o + 1] = sg * s + 172 * g + night * nG + d;
+      out[o + 2] = sb * s + 214 * g + night * nB + d;
       out[o + 3] = al[i];
     }
 
@@ -941,6 +1327,18 @@ export function createGlobe(canvas, opts = {}) {
   /* ----------------------------------------------------- the projection */
   /* General form, for the handful of pins. Returns null on the far side. */
   function project(lat, lon) {
+    if (isMap()) {
+      const ppd = mppd();
+      const dl = angleDelta(state.lon, lon);
+      return {
+        x: state.cx + dl * ppd,
+        y: state.cy - (lat - state.lat) * ppd,
+        /* the flat plate has no far side, so nothing is ever behind anything. `z`
+           is what the pin loop fades against, and 1 means "fully facing you" —
+           which on a map every place on it is. */
+        z: 1,
+      };
+    }
     const p = lat * RAD, l = lon * RAD;
     const cl = Math.cos(p);
     return projectVec(cl * Math.sin(l), cl * Math.cos(l), Math.sin(p));
@@ -951,6 +1349,13 @@ export function createGlobe(canvas, opts = {}) {
    * see the maths over THE SURFACE PASS — evaluated once for a fingertip.
    * setCam() first; the api wrapper does it. */
   function unproject(x, y) {
+    if (isMap()) {
+      const ppd = mppd();
+      const lat = state.lat - (y - state.cy) / ppd;
+      if (lat > 90 || lat < -90) return null;      // above the pole is off the plate
+      const lon = state.lon + (x - state.cx) / ppd;
+      return { lat, lon: ((lon % 360) + 540) % 360 - 180 };
+    }
     const u = (x - state.cx) / state.r, v = -(y - state.cy) / state.r;
     const w2 = 1 - u * u - v * v;
     if (w2 <= 0) return null;                        // outside the limb: empty space
@@ -993,6 +1398,7 @@ export function createGlobe(canvas, opts = {}) {
    * No closePath(): fill() closes each subpath implicitly, which is what we
    * want, while an explicit close would draw the closing segment in the stroke. */
   function ringInto(fillPath, strokePath, ring, step) {
+    if (isMap()) return ringIntoMap(strokePath, ring, step);
     const { xyz, n } = ring;
     const { cx, cy, r } = state;
     const { sLon, cLon, sLat, cLat } = cam;
@@ -1023,8 +1429,55 @@ export function createGlobe(canvas, opts = {}) {
     }
   }
 
+  /* ★ THE SAME COASTLINE, FLAT — AND THE SEAM IS THE WHOLE OF THE WORK.
+   *
+   * On the sphere a ring that runs off one edge of the map simply carries on round
+   * the back, which is why the packed unit vectors never had to think about it. On
+   * a plate the ±180° meridian is a real edge, and a ring crossing it has two
+   * consecutive points a whole world apart in x — joined naively, Eurasia grows a
+   * horizontal bar straight across the map. This is the same class of bug
+   * js/earth.js's land mask hit when it filled the plate as a rectangle, and it
+   * has the same shape of answer: unwrap relative to the camera, and break the run
+   * wherever the unwrapped step is more than half a world.
+   *
+   * There is no fill path here. The sphere fills nothing either — the plate draws
+   * the land and only the stroke remains (see the star in paint()) — so the map
+   * inherits a decision rather than making a different one.
+   */
+  function ringIntoMap(strokePath, ring, step) {
+    const { ll, n } = ring;
+    const { cx, cy } = state;
+    const ppd = mppd();
+    const lon0 = state.lon, lat0 = state.lat;
+    /* one screen's worth either side is all that can be drawn; anything past it is
+       clipped by the canvas anyway and costs a lineTo to find that out */
+    const halfW = state.w / 2 + 40, halfH = state.h / 2 + 40;
+    let open = false, prevX = 0;
+    for (let i = 0; i < n; i += step) {
+      const dl = angleDelta(lon0, ll[i * 2]);
+      const x = cx + dl * ppd;
+      const y = cy - (ll[i * 2 + 1] - lat0) * ppd;
+      /* a jump of more than half the world in one step is the seam, not a coastline */
+      if (open && Math.abs(x - prevX) > state.w * 0.5 + 180 * ppd * 0.5) open = false;
+      prevX = x;
+      if (Math.abs(x - cx) > halfW || Math.abs(y - cy) > halfH) { open = false; continue; }
+      if (!open) { strokePath.moveTo(x, y); open = true; } else strokePath.lineTo(x, y);
+    }
+  }
+
   /** true when the ring is worth drawing at all */
   function ringVisible(ring, r) {
+    if (isMap()) {
+      /* Latitude only, and deliberately: longitude wraps, so a lon-extent test has
+         to reason about the seam to be correct and would reject real coastline the
+         first time it got that wrong. A latitude band is unambiguous, it is the
+         axis a zoomed map is actually narrow in, and the size test below still
+         throws away every island too small to register. */
+      const ppd = mppd();
+      const halfLat = state.h / 2 / ppd + 2;
+      if (ring.latMin > state.lat + halfLat || ring.latMax < state.lat - halfLat) return false;
+      return 2 * ring.span * (180 / Math.PI) * ppd >= 5;
+    }
     const dot = cam.a * ring.capA + cam.b * ring.capB + cam.c * ring.capC;
     if (dot < ring.cull) return false;            // wholly over the horizon
     /* ★ THE SIZE CULL IS THE HOT ONE, because the per-ring cost is fixed — a
@@ -1037,11 +1490,144 @@ export function createGlobe(canvas, opts = {}) {
     return 2 * r * ring.span >= 5;                // or too small to register
   }
 
+  /** how far past the plate's own detail we are, 0..1 — see PLATE_FADE_HI */
+  function plateGone() {
+    const t = isMap()
+      ? PLATE_W / (state.zoom * state.w * state.dpr)
+      : PLATE_W / (TAU * state.r * state.dpr);
+    if (t >= PLATE_FADE_HI) return 0;
+    return Math.min(1, (PLATE_FADE_HI - t) / (PLATE_FADE_HI - PLATE_FADE_LO));
+  }
+
+  /* ============================================== THE GRID, AT WHATEVER SCALE
+   * ★ IT USED TO BE A CONSTANT 20° AND THAT IS ONLY RIGHT AT ONE ZOOM.
+   *
+   * The packed GRATICULE is built once at module load at 20°, which is exactly
+   * what a whole planet wants and is nothing at all once the reader is inside
+   * Sweden: at the atlas stage's deeper zooms not one of its lines is on screen,
+   * so the survey grid — the thing that says how far apart two circuits are —
+   * simply vanished at the moment it started to mean something.
+   *
+   * So the step is chosen from what is actually visible, off a 1-2-5 ladder, aimed
+   * at six or so lines across the box. It is drawn through project(), which means
+   * one implementation covers both projections and the sphere's far side falls out
+   * of project() returning null. The 20° rings are still used at world scale,
+   * where they are already packed and already right.
+   * ====================================================================== */
+  const GRAT_STEPS = [20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02];
+
+  function paintGraticule(rEff, isDay, map) {
+    /* degrees across the shorter axis of the box */
+    const spanDeg = Math.min(state.w, state.h) / (rEff * RAD);
+    let step = 20;
+    for (const s of GRAT_STEPS) { if (spanDeg / s > 7) break; step = s; }
+
+    const g = new Path2D();
+    if (step === 20 && !map) {
+      // the packed rings, unchanged — no allocation, and the cull is a dot product
+      const gstep = rEff > 300 ? 1 : 2;
+      for (const ring of GRATICULE) {
+        if (!ringVisible(ring, rEff)) continue;
+        ringInto(null, g, ring, gstep);
+      }
+    } else {
+      const c = viewWindow();
+      const lat0 = map ? c.lat0 : state.lat - spanDeg, lat1 = map ? c.lat1 : state.lat + spanDeg;
+      const lon0 = map ? state.lon + c.lon0 : state.lon - spanDeg;
+      const lon1 = map ? state.lon + c.lon1 : state.lon + spanDeg;
+      const snap = (v) => Math.ceil(v / step) * step;
+      const fine = step / 6;
+      // parallels
+      for (let la = snap(Math.max(-89.9, lat0)); la <= Math.min(89.9, lat1); la += step) {
+        let open = false;
+        for (let lo = lon0; lo <= lon1 + fine; lo += fine) {
+          const p = project(la, lo);
+          if (!p) { open = false; continue; }
+          if (!open) { g.moveTo(p.x, p.y); open = true; } else g.lineTo(p.x, p.y);
+        }
+      }
+      // meridians
+      for (let lo = snap(lon0); lo <= lon1; lo += step) {
+        let open = false;
+        for (let la = Math.max(-89.9, lat0); la <= Math.min(89.9, lat1) + fine; la += fine) {
+          const p = project(la, lo);
+          if (!p) { open = false; continue; }
+          if (!open) { g.moveTo(p.x, p.y); open = true; } else g.lineTo(p.x, p.y);
+        }
+      }
+    }
+    ctx.strokeStyle = isDay ? 'rgba(20,20,14,.13)' : 'rgba(236,229,217,.075)';
+    ctx.lineWidth = 0.6;
+    ctx.stroke(g);
+    canvas.dataset.grid = String(step);
+  }
+
+  /* ==================================================== NAMES ON THE PINS
+   * ★ ONLY WHERE THERE IS ROOM, AND THE ORDER IS THE POINT.
+   *
+   * A worldwide pin set is a label set, and a label set with nothing arbitrating
+   * it is a smear. The rule here is one greedy pass in PRIORITY order — a booked
+   * date outranks a competition circuit, which outranks a reference pin — so when
+   * two names collide the one that loses is always the less important of the two,
+   * at every zoom, rather than whichever happened to be later in the array.
+   * Boxes are compared against those already placed, so the cost is quadratic in
+   * what is ON SCREEN and labelled, which is a few dozen at the very most.
+   *
+   * Nothing is labelled at all until the pins have actually separated: below this
+   * there is not a name on Earth that would land beside its own dot.
+   *
+   * ★ TWO THRESHOLDS, BECAUSE `zoom` MEANS TWO THINGS. On the sphere 2.2 is a
+   * little over twice the disc, which is where the eight dates stop overlapping.
+   * The map's number counts divisions of the world, so the same 2.2 would be 160°
+   * of longitude across the box — a hemisphere, labelled. 8 is 45°, which is about
+   * where the Nordics stop being one smudge.
+   */
+  const LABEL_FROM_GLOBE = 2.2, LABEL_FROM_MAP = 8;
+
+  function paintLabels(isDay, rEff) {
+    if (!state.labels) return;
+    if (state.zoom < (isMap() ? LABEL_FROM_MAP : LABEL_FROM_GLOBE)) return;
+    const rows = [];
+    for (const pin of state.pins) {
+      if (!pin.label) continue;
+      const p = project(pin.lat, pin.lon);
+      if (!p || p.z <= 0.06) continue;
+      if (p.x < -60 || p.x > state.w + 60 || p.y < -30 || p.y > state.h + 30) continue;
+      rows.push({ pin, p, rank: pin.event ? 0 : (pin.ranked ? 1 : 2) });
+    }
+    rows.sort((a, b) => a.rank - b.rank);
+
+    ctx.font = '600 10px ' + (layers.mono || 'ui-monospace, monospace');
+    ctx.textBaseline = 'middle';
+    const placed = [];
+    for (const row of rows) {
+      const text = row.pin.label;
+      const tw = ctx.measureText(text).width;
+      const x = row.p.x + 8, y = row.p.y;
+      const box = { x0: x - 2, y0: y - 7, x1: x + tw + 3, y1: y + 7 };
+      let clash = false;
+      for (const b of placed) {
+        if (box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0) { clash = true; break; }
+      }
+      if (clash) continue;
+      placed.push(box);
+      /* struck twice: the page colour under the type first, so a name over a lit
+         continent is as readable as one over open sea */
+      ctx.lineWidth = 2.6;
+      ctx.strokeStyle = isDay ? 'rgba(248,245,238,.85)' : 'rgba(7,8,10,.85)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = row.pin.event ? (row.pin.color || layers.accent)
+                                    : (isDay ? 'rgba(24,22,16,.78)' : 'rgba(236,229,217,.72)');
+      ctx.fillText(text, x, y);
+    }
+    canvas.dataset.labels = String(placed.length);
+  }
+
   /* ------------------------------------------------------------ painting */
   function paint() {
     const { cx, cy, r, w, h } = state;
     ctx.clearRect(0, 0, w, h);
-    if (r <= 4) return;
+    if (!isMap() && r <= 4) return;
 
     const isDay = document.documentElement.dataset.theme === 'day';
     if (layers.dirty || layers.theme !== (isDay ? 'day' : 'night')) buildLayers(isDay);
@@ -1053,12 +1639,16 @@ export function createGlobe(canvas, opts = {}) {
     // other, twice a minute at most. See the note over `sun`.
     setSun(performance.now());
 
+    const win = viewWindow();
+    const map = isMap();
+
     /* -- the atmosphere ring outside the limb, scaled about the centre the zoom
      *    scales about — see buildLayers(). Skipped outright once its inner edge
      *    has left the canvas: past about 1.5x there is no ring on screen to draw,
-     *    and a 4x upscale blit of a full-viewport image every frame is not free. */
+     *    and a 4x upscale blit of a full-viewport image every frame is not free.
+     *    A flat plate has no limb for it to sit outside of, so the map has none. */
     const zoomed = state.zoom;
-    if (state.r0 * zoomed * 0.965 < Math.hypot(w, h) / 2) {
+    if (!map && state.r0 * zoomed * 0.965 < Math.hypot(w, h) / 2) {
       if (zoomed === 1) ctx.drawImage(layers.air, 0, 0, w, h);
       else ctx.drawImage(layers.air, cx - cx * zoomed, cy - cy * zoomed, w * zoomed, h * zoomed);
     }
@@ -1072,14 +1662,25 @@ export function createGlobe(canvas, opts = {}) {
      * quantises the silhouette to whole device pixels, so the sub-texel coverage
      * alpha buildSurface() now writes was being thrown away at exactly the edge
      * it was computed for. The surface carries its own feathered edge, so it
-     * needs no clip; the vector work below still does, and gets one. */
-    const surface = buildSurface(isDay);
+     * needs no clip; the vector work below still does, and gets one.
+     *
+     * ★ AND IT IS BLITTED TO THE WINDOW IT WAS BUILT FOR, not to the whole disc.
+     * The two are the same rectangle at zoom 1 — see viewWindow(), which rounds
+     * outward precisely so this can never leave a hairline unpainted. */
+    const surface = buildSurface(isDay, win);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(surface, cx - r, cy - r, r * 2, r * 2);
+    if (map) {
+      ctx.drawImage(surface, 0, 0, w, h);
+    } else {
+      ctx.drawImage(surface,
+        cx + r * win.u0, cy - r * win.v1,
+        r * (win.u1 - win.u0), r * (win.v1 - win.v0));
+    }
 
     ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.clip();
+    if (map) { ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip(); }
+    else { ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.clip(); }
 
     /* -- the coastline, stroked over the imagery.
      *
@@ -1105,40 +1706,51 @@ export function createGlobe(canvas, opts = {}) {
      * slivers lying in the sea. That is the "weird stuff in some countries" this
      * guard is for; compare trace/shots/globe/*-step1 against the frames beside
      * them. Below ~150px across nothing on the disc resolves anyway. */
-    const base = r > 150 ? 1 : 2;
+    /* ★ ONE SCALE FOR BOTH PROJECTIONS. Every heuristic below — how far to
+       decimate a ring, how fine to draw the grid, how big a pin is — is really
+       asking "how many pixels is a radian of ground here", and on the sphere that
+       is `r` by definition. The map's answer is its own, and expressing it this way
+       means not one of those thresholds had to be retuned or duplicated. */
+    const rEff = map ? mppd() * (180 / Math.PI) : r;
+
+    const base = rEff > 150 ? 1 : 2;
     const outline = new Path2D();
     for (const ring of LAND_RINGS) {
-      if (!ringVisible(ring, r)) continue;
+      if (!ringVisible(ring, rEff)) continue;
       ringInto(null, outline, ring, Math.min(base, Math.max(1, Math.floor(ring.n / 6))));
     }
-    ctx.strokeStyle = isDay ? 'rgba(24,22,16,.30)' : 'rgba(226,236,244,.20)';
+    /* ★ THE LINE WORK EARNS ITS KEEP AS THE IMAGERY GIVES UP. Deep in, the plate
+       has been faded back to a tonal ground (see fadeK) precisely so this can carry
+       the picture — so it is drawn a little firmer there rather than staying at the
+       weight it needs when it is a hairline over a photograph. */
+    const ink = Math.min(1, 0.30 + 0.34 * plateGone());
+    ctx.strokeStyle = isDay ? `rgba(24,22,16,${ink})` : `rgba(226,236,244,${(ink * 0.72).toFixed(3)})`;
     ctx.lineWidth = 0.7;
     ctx.stroke(outline);
 
-    // -- graticule, 20°, quiet. Stroke only, so no fill path — a null fillPath
-    //    also means it never picks up the limb-hugging segments.
-    const grat = new Path2D();
-    const gstep = r > 300 ? 1 : 2;
-    for (const ring of GRATICULE) {
-      if (!ringVisible(ring, r)) continue;
-      ringInto(null, grat, ring, gstep);
-    }
-    ctx.strokeStyle = isDay ? 'rgba(20,20,14,.13)' : 'rgba(236,229,217,.075)';
-    ctx.lineWidth = 0.6;
-    ctx.stroke(grat);
+    paintGraticule(rEff, isDay, map);
 
     ctx.restore();
 
-    // -- the limb itself, struck once, outside the clip so it is not half-cut
-    ctx.strokeStyle = isDay ? 'rgba(30,40,50,.35)' : 'rgba(150,200,230,.22)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+    // -- the limb itself, struck once, outside the clip so it is not half-cut.
+    //    A plate has no silhouette, so the map draws none.
+    if (!map) {
+      ctx.strokeStyle = isDay ? 'rgba(30,40,50,.35)' : 'rgba(150,200,230,.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+    }
 
     // -- pins ------------------------------------------------------------
     const t = performance.now() / 1000;
     for (const pin of state.pins) {
       const p = project(pin.lat, pin.lon);
       if (!p) continue;
+      /* ★ OFF THE BOX IS OFF THE BOX. On the sphere a pin on the far side is
+         already `null`, so this never mattered; on the map every pin on Earth
+         projects to a finite point and several hundred of them would be stroked
+         off-canvas every frame for nothing. Cheap, and it is what lets the pin set
+         grow to a worldwide one without the frame budget noticing. */
+      if (p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) continue;
       const fade = Math.min(1, p.z * 3.2);           // dim toward the limb
       const focus = state.focus === pin.id;
       ctx.globalAlpha = fade * (pin.event ? 1 : 0.62);
@@ -1168,6 +1780,8 @@ export function createGlobe(canvas, opts = {}) {
       ctx.globalAlpha = 1;
     }
 
+    paintLabels(isDay, rEff);
+
     // -- home, drawn as a survey cross rather than another dot
     if (state.home) {
       const p = project(state.home.lat, state.home.lon);
@@ -1181,12 +1795,26 @@ export function createGlobe(canvas, opts = {}) {
         ctx.globalAlpha = 1;
       }
     }
+
+    /* ★ THE ARRIVAL, APPLIED TO THE WHOLE FRAME AT ONCE AND LAST — see WARM_MS.
+       Composited rather than set as a globalAlpha, because the pin pass runs its
+       own alpha per pin and would overwrite one. `destination-out` scales every
+       pixel's alpha uniformly, which is exactly a fade, and it is one fill for the
+       third of a second the fade lasts and nothing at all afterwards. */
+    if (state.warm < 1) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = `rgba(0,0,0,${(1 - state.warm).toFixed(3)})`;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = 'source-over';
+    }
   }
 
   /* --------------------------------------------------------------- loop */
   let last = performance.now();
   let lastPaint = -1e9;
   let raf = 0;
+  const born = performance.now();     // when this globe was made — see WARM_MS
+  let warmFrom = -1;                  // when its fade started, or -1 for not yet
   /* ★ Published as data-paints so verify.mjs §8 can assert the REPAINT RATE
      rather than the frame rate. Frame rate in headless measures swiftshader's
      software rasteriser, which is not what ships and which varied 14–150 fps
@@ -1197,9 +1825,41 @@ export function createGlobe(canvas, opts = {}) {
   let stillSig = '';        // last frame painted while MOTION was off
   function frame(now) {
     raf = requestAnimationFrame(frame);
-    const dt = Math.min(0.05, (now - last) / 1000);
+    /* ★ FLOORED AT ZERO, AND THAT IS A REAL BUG RATHER THAN A BELT AND BRACES.
+     *
+     * A requestAnimationFrame callback is handed the time the FRAME began, which
+     * can be earlier than the `performance.now()` read when this globe was
+     * constructed — the constructor runs inside a frame that had already started.
+     * The hero never showed it because it is built at boot, before the first frame
+     * exists; §03's atlas is built from a click handler, so its very first `now`
+     * was reliably 18ms in the past.
+     *
+     * A negative dt is harmless in the eases, which multiply a zero difference by
+     * it. It is not harmless in the MAX_TURN clamp below: `cap` goes negative, the
+     * test `mag > cap` passes for a camera that is not moving at all, and the scale
+     * factor is `cap / 0` — which is −Infinity, and −Infinity times the −0 it is
+     * scaling is NaN. Both angles were NaN from the second frame onward, and every
+     * number downstream of the camera went with them: no surface, no pins, no sun.
+     * Silent, total, and one frame after construction. */
+    const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
     last = now;
     if (!state.running) return;
+
+    /* ★ THE ARRIVAL — see WARM_MS. Advanced before every early return below, and
+       driven off the CLOCK rather than off dt, so a tab that was backgrounded
+       during the bake comes back with the planet already there rather than with a
+       fade waiting to be played. `warmFrom` is set once, by whichever of the two
+       conditions lands first: the plate baking, or the fallback expiring. */
+    if (state.warm < 1) {
+      if (warmFrom < 0 && (PLATE.ready || PLATE.failed || now - born > WARM_FALLBACK_MS)) {
+        warmFrom = now;
+      }
+      state.warm = warmFrom < 0 ? 0 : Math.min(1, (now - warmFrom) / WARM_MS);
+      /* it is a fade, so every frame of it is a different picture — take them all
+         rather than letting the still-frame signature below decide there is
+         nothing new to draw */
+      lastPaint = -1e9; stillSig = '';
+    }
 
     /* ★ THE ZOOM EASES OUTSIDE THE MOTION GATE, ON PURPOSE. Everything else in
        here is decoration the MOTION pill is entitled to switch off — an idle
@@ -1216,6 +1876,17 @@ export function createGlobe(canvas, opts = {}) {
       state.r = state.r0 * state.zoom;
     }
 
+    /* ★ THE MAP MAY NOT PAN OFF THE TOP OF THE WORLD. On the sphere the poles are
+       just places and ±85° is a comfort limit; on a plate there is nothing above
+       90° at all, so the camera is held far enough in that the box stays full of
+       Earth. Applied to both the camera and its target, because a zoom out widens
+       the box and can leave a perfectly legal latitude suddenly illegal. */
+    if (isMap()) {
+      const lim = mapLatClamp();
+      state.lat = Math.max(-lim, Math.min(lim, state.lat));
+      state.tLat = Math.max(-lim, Math.min(lim, state.tLat));
+    }
+
     if (state.motion) {
       const k = 1 - Math.pow(0.0016, dt);            // frame-rate independent ease
       let dLon = angleDelta(state.lon, state.tLon) * k;
@@ -1224,8 +1895,12 @@ export function createGlobe(canvas, opts = {}) {
       // ★ clamp the turn rate — see MAX_TURN. Scale both axes by the same factor
       // so a capped turn follows the same arc, just slower, instead of sliding
       // along one axis first and bending toward the target at the end.
+      /* `mag > 0` as well as `mag > cap`: a camera sitting exactly on its target
+         has nothing to scale, and dividing by its zero is how the negative dt
+         above turned a still globe into NaN. Cheap, and it is the second half of
+         that fix — either one alone leaves the other reachable. */
       const mag = Math.hypot(dLon, dLat), cap = MAX_TURN * dt;
-      if (mag > cap) { const s = cap / mag; dLon *= s; dLat *= s; }
+      if (mag > cap && mag > 0) { const s = cap / mag; dLon *= s; dLat *= s; }
 
       state.lon += dLon;
       state.lat += dLat;
@@ -1279,7 +1954,7 @@ export function createGlobe(canvas, opts = {}) {
                   document.documentElement.dataset.theme + '|' + state.w + 'x' + state.h +
                   '|' + (PLATE.ready ? 1 : 0) + '|' + subsolar(Date.now()).lon.toFixed(1) +
                   /* the reader's own zoom, so a pinch with MOTION off still draws */
-                  '|' + state.zoom.toFixed(3);
+                  '|' + state.zoom.toFixed(3) + '|' + state.mode;
       if (sig === stillSig && !layers.dirty) return;
       stillSig = sig;
     }
@@ -1326,9 +2001,15 @@ export function createGlobe(canvas, opts = {}) {
     canvas.dataset.zoom = state.zoom.toFixed(2);
     canvas.dataset.plate = PLATE.ready ? 'ready' : (PLATE.failed ? 'failed' : 'loading');
     canvas.dataset.plateKind = PLATE.detail || '';
+    /* published so "it arrives once, and only with a real surface" is a claim a
+       test can make about a canvas it cannot see inside — see WARM_MS */
+    canvas.dataset.warm = state.warm.toFixed(3);
 
     paint();
-    canvas.dataset.raster = String(surf.size);   // set by paint(), so read it after
+    // set by paint(), so read it after. Two numbers now, because the raster is the
+    // WINDOW's shape rather than a square disc — see viewWindow().
+    canvas.dataset.raster = surf.gw + 'x' + surf.gh;
+    canvas.dataset.mode = state.mode;
     /* ★ The sun, published for the same reason and asserting the OPPOSITE thing
        again — see the history over subsolar(). The light is fixed in WORLD space,
        so `sunLat`/`sunLon` are the real subsolar point and must NOT follow the
@@ -1356,7 +2037,20 @@ export function createGlobe(canvas, opts = {}) {
   /* ------------------------------------------------------------- public */
   const api = {
     resize() { resize(); paint(); },
-    setPins(pins, home) { state.pins = pins; state.home = home || null; },
+    /**
+     * The whole plotted set. Rows may carry, beyond {id, lat, lon}:
+     *   event   a booked date — filled, coloured, allowed to pulse
+     *   ranked  a circuit with real geometry behind it, so pressing it opens a panel
+     *   label   a name to draw beside it once the pins have separated
+     *   color   an accent, for `event` rows
+     * Nothing here is per-frame work, so the set may be as large as the atlas
+     * wants; paint() culls to the box and paintLabels() deconflicts what is left.
+     */
+    setPins(pins, home) {
+      state.pins = pins;
+      state.home = home || null;
+      canvas.dataset.pins = String(pins.length);
+    },
     /**
      * Turn the Earth so this coordinate faces the camera.
      *
@@ -1411,6 +2105,54 @@ export function createGlobe(canvas, opts = {}) {
 
     /** how far in the reader currently is, for the page's own chrome */
     zoom() { return state.tZoom; },
+    /** the ceiling that applies right now — it differs by instance and by mode */
+    zoomMax() { return zoomCeiling(); },
+    /** which projection is on screen */
+    mode() { return state.mode; },
+
+    /**
+     * Swap the projection under the reader, keeping the ground where it is.
+     *
+     * ★ THE CAMERA IS CARRIED OVER, NOT RESET, and that is the whole reason the
+     * toggle is worth having rather than being two separate pictures. `zoom` means
+     * different things either side (see MAP_ZOOM_MAX), so what is preserved is the
+     * thing the reader actually cares about — how much GROUND is in the box — by
+     * matching the visible longitude span across the swap. Press MAP over Sweden
+     * and you get Sweden, at the size you were looking at it.
+     */
+    setMode(next) {
+      const want = next === 'map' ? 'map' : 'globe';
+      if (want === state.mode) return;
+      /* degrees of longitude across the box, in the projection we are leaving */
+      const spanNow = isMap()
+        ? 360 / state.tZoom
+        : Math.min(180, state.w / (state.r0 * state.tZoom) / RAD);
+      state.mode = want;
+      let z = isMap()
+        ? 360 / Math.max(2, spanNow)
+        : Math.min(state.zMax, Math.max(1, state.w / (state.r0 * spanNow * RAD)));
+      /* ★ AND ON A PLATE, FAR ENOUGH IN THAT THE POLE IS NOT IN THE BOX.
+         A sphere can be looked at from over the pole; an equirectangular plate
+         ends there, so the camera is held back by mapLatClamp() — and at a whole-
+         world zoom that clamp is 40°, which would have thrown a reader looking at
+         Sweden down to the Mediterranean the instant they pressed MAP. Preserving
+         the SPAN and preserving the PLACE conflict at high latitude, and the place
+         is what they were looking at, so the span gives way: this is the shallowest
+         zoom that still holds the current latitude in the middle. */
+      if (isMap()) {
+        const need = Math.abs(state.lat);
+        if (need < 89) {
+          z = Math.max(z, state.h / 2 / (90 - need) * 360 / state.w);
+        }
+      }
+      state.zoom = state.tZoom = Math.max(zoomFloor(), Math.min(zoomCeiling(), z));
+      state.r = state.r0 * state.zoom;
+      /* every cache below is keyed on geometry that has just changed its meaning */
+      geo.key = ''; lut.theme = null; layers.dirty = true;
+      cost.rung = 0; cost.over = 0; cost.ms = 0;
+      lastPaint = -1e9; stillSig = '';
+      api.onZoom?.(state.tZoom);
+    },
 
     /**
      * Turn the planet under a drag of (dx, dy) canvas pixels.
@@ -1426,6 +2168,21 @@ export function createGlobe(canvas, opts = {}) {
      * degrees before the pole do not become a slingshot.
      */
     turnBy(dx, dy) {
+      if (isMap()) {
+        /* ★ A MAP IS DRAGGED, NOT TURNED, and the sign is the difference. Pulling
+           the plate left moves the camera east by exactly the ground under the
+           finger — no cos(lat) correction, because a plate carrée spends the same
+           pixels on a degree of longitude at every latitude, which is the one thing
+           it gets wrong about the world and the one thing that makes it easy to
+           drag. The clamp is applied in frame(), where a zoom can invalidate a
+           latitude that was legal when it was set. */
+        const ppd = mppd();
+        state.tLon = state.lon - dx / ppd;
+        state.tLat = state.lat + dy / ppd;
+        state.lon = state.tLon; state.lat = state.tLat;
+        state.holdUntil = performance.now() + 2400;
+        return;
+      }
       const k = 1 / RAD / state.r;
       state.tLon = state.lon - dx * k / Math.max(0.4, Math.cos(state.lat * RAD));
       state.tLat = Math.max(-85, Math.min(85, state.lat + dy * k));
@@ -1448,7 +2205,7 @@ export function createGlobe(canvas, opts = {}) {
      */
     zoomBy(k, x, y) {
       const z0 = state.tZoom;
-      const z1 = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z0 * k));
+      const z1 = Math.max(zoomFloor(), Math.min(zoomCeiling(), z0 * k));
       if (z1 === z0) return;
       state.tZoom = z1;
       if (z1 > z0 && x != null) {
@@ -1462,6 +2219,26 @@ export function createGlobe(canvas, opts = {}) {
       }
       state.holdUntil = performance.now() + 2400;
       api.onZoom?.(z1);
+    },
+
+    /**
+     * Go to a place at a stated closeness, for the list beside the atlas.
+     *
+     * `close` is 0..1 rather than a zoom number, because the two projections
+     * measure zoom differently (see MAP_ZOOM_MAX) and a list row that means "show
+     * me this circuit" should not have to know which one is on screen. It is
+     * geometric between the floor and the ceiling, so 0.5 is the same *apparent*
+     * step in either.
+     */
+    goTo(lat, lon, close = 0.62) {
+      const lo = zoomFloor(), hi = zoomCeiling();
+      const z = lo * Math.pow(hi / lo, Math.max(0, Math.min(1, close)));
+      state.tZoom = z;
+      if (!state.motion) { state.zoom = z; state.r = state.r0 * z; }
+      state.tLat = Math.max(-85, Math.min(85, lat));
+      state.tLon = lon;
+      state.holdUntil = performance.now() + 6000;
+      api.onZoom?.(z);
     },
 
     /** back to the whole planet, without moving where it is pointing */

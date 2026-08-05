@@ -137,6 +137,83 @@ export const KIT_1X = [
   { id: 'wx-sunscreen', name: 'Sunscreen', category: 'Weather & Apparel', status: 'owned', defaultQty: 1, suggested: true },
 ];
 
+/* ===================================================== THE CATALOGUE
+ * ★ NEW EQUIPMENT GOES HERE, AND NEVER INTO KIT_1X ABOVE.
+ *
+ * Theodor: "for the kit and equipment-wise, ask me questions about any more
+ * equipment I want to add in, if it's gonna be a rental thing or if I already own
+ * it. It could be whatever a photographer has. I don't know, you decide."
+ *
+ * The obvious move is to append to KIT_1X and be done. It is also wrong, and the
+ * note over that array says why: it is not a list of good ideas, it is the
+ * inventory Field Atlas 1.x is KNOWN to have carried, recovered from commit
+ * dacef4d. Its whole value is that §05 can print "this is your equipment" and be
+ * telling the truth. Add a tripod nobody owns to it and that sentence becomes a
+ * guess, silently, for every reader on every device.
+ *
+ * So this is a separate list with a different job. Nothing in it is claimed to be
+ * his. It is a shelf the kit panel offers — one press moves a row across into
+ * `fa2.gear.inventory`, which is 2.0's own and always has been — and until
+ * something is pressed the kit is exactly what it was. That is the same shape of
+ * answer adopt() already gives for the list as a whole: an explicit act, never a
+ * side effect.
+ *
+ * ★ WHAT IS IN IT, AND WHAT WAS LEFT OUT ON PURPOSE.
+ *
+ * Asked to choose the scope rather than take every category offered — "I feel like
+ * it's maybe gonna be too much if it's all of them" — the rule applied was: it
+ * goes in if it extends something already in the bag, or closes a real gap in a
+ * full race weekend. Eighteen items, three groups.
+ *
+ *   Lenses           the glass he does not own. He picked this one by name.
+ *   Accessories      what a monopod and a CPL imply — a head, a rest, the ND
+ *                    filters, and the cleaning kit that is not a rocket blower.
+ *   Power & Storage  offload and top-up. One 128 GB card and one power bank is
+ *                    not a weekend, and it is the least glamorous omission here.
+ *
+ * Deliberately NOT in it:
+ *   · a tripod — he shoots motorsport off a monopod, which is the right tool;
+ *     a tripod would sit in the list unused. The two things that genuinely extend
+ *     a monopod are in.
+ *   · stool, headlamp, first aid, multi-tool, binoculars — he already carries the
+ *     three that matter (ear protection, hi-vis, water), and the rest is exactly
+ *     the generic-basics category 1.x deleted its seed to escape.
+ *   · video, audio, gimbal, drone, press tabard — offered and not chosen.
+ *   · ★ flash and strobe, which is 1.x's standing rule and is absolute. He does
+ *     not use it. There is none here and none may be added.
+ *
+ * ★ `rental` IS THE STATUS THE ITEM ARRIVES WITH, not a claim about the world.
+ * The split is "would a rental house actually rent this": glass yes, consumables
+ * no. So the lenses land as RENTAL — the sign Theodor asked for on gear he wants
+ * and does not have — and everything you would simply buy and keep lands as
+ * OWNED, one press from being flipped either way in the panel.
+ * ==================================================================== */
+export const GEAR_CATALOGUE = [
+  // ---- Lenses: the glass he does not own -----------------------------------
+  { id: 'cat-50-18', name: '50mm f/1.8 prime', category: 'Lenses', rental: true },
+  { id: 'cat-85-18', name: '85mm f/1.8 prime', category: 'Lenses', rental: true },
+  { id: 'cat-150600', name: '150–600mm super-telephoto', category: 'Lenses', rental: true },
+  { id: 'cat-tc14', name: '1.4× teleconverter', category: 'Lenses', rental: true },
+  { id: 'cat-tubes', name: 'Extension tube set', category: 'Lenses', rental: true },
+
+  // ---- Accessories: what the monopod and the CPL imply ---------------------
+  { id: 'cat-mono-head', name: 'Monopod tilt head', category: 'Accessories' },
+  { id: 'cat-beanbag', name: 'Bean bag (fence-post rest)', category: 'Accessories' },
+  { id: 'cat-vnd', name: 'Variable ND filter', category: 'Accessories' },
+  { id: 'cat-nd-set', name: 'ND filter set (ND8 / ND64)', category: 'Accessories' },
+  { id: 'cat-lenspen', name: 'Lens pen', category: 'Accessories' },
+  { id: 'cat-swabs', name: 'Sensor swabs + solution', category: 'Accessories' },
+  { id: 'cat-caps', name: 'Spare body cap / rear caps', category: 'Accessories' },
+  { id: 'cat-stepup', name: 'Step-up ring set', category: 'Accessories' },
+
+  // ---- Power & Storage: offload and top-up --------------------------------
+  { id: 'cat-ssd', name: 'Portable SSD (1 TB)', category: 'Power & Storage' },
+  { id: 'cat-sd-wallet', name: 'SD card wallet (hard case)', category: 'Power & Storage' },
+  { id: 'cat-charger65', name: 'USB-C wall charger (65 W)', category: 'Power & Storage' },
+  { id: 'cat-usbc', name: 'USB-C cables', category: 'Power & Storage', qty: 2 },
+  { id: 'cat-car12v', name: 'Car charger / 12 V adapter', category: 'Power & Storage' },
+];
+
 /* ===================================================== 2.0'S OWN KIT
  * ★ 2.0 IS AN EDITOR NOW, AND IT STILL DOES NOT TOUCH evhub.*
  *
@@ -276,6 +353,49 @@ const patch = (id, change) =>
 export function addItem({ name, category, rental = false, qty = 1 } = {}) {
   const item = normalise({ name, category, rental, qty });
   return edit(items => [...items, item]) ? item.id : null;
+}
+
+/**
+ * What is still on the shelf — every catalogue row not already in `items`.
+ *
+ * ★ MATCHED ON NAME, NOT ON ID, AND IT HAS TO BE. addItem() mints a fresh id for
+ * everything it stores (see newId()), so a row added from the catalogue does not
+ * carry `cat-lenspen` forward and an id match would offer it again for ever.
+ * Names are what the reader sees and what they would consider a duplicate, so
+ * that is what is compared — folded and trimmed, because the panel lets them be
+ * edited afterwards and "Lens Pen " must not become a second lens pen.
+ */
+export function catalogueLeft(items) {
+  const have = new Set((items || []).map(it => String(it.name).trim().toLowerCase()));
+  return GEAR_CATALOGUE.filter(c => !have.has(c.name.trim().toLowerCase()));
+}
+
+/**
+ * Move one catalogue row into the reader's own kit.
+ *
+ * ★ IT ADOPTS FIRST IF IT HAS TO, and that is the one place adoption happens
+ * without its own button. The rule in this file is that `fa2.gear.inventory` is
+ * only ever created by an explicit act — but pressing + beside a named piece of
+ * equipment IS an explicit act, and making the reader press a different button
+ * first, read a paragraph about 1.x, and then find their place again would be
+ * ceremony rather than consent. What it adopts is exactly the list already on
+ * screen, so nothing appears or disappears at the moment it happens; the only
+ * visible change is the item they asked for.
+ *
+ * @returns the new item's id, or null if nothing could be written
+ */
+export function addFromCatalogue(catId, current) {
+  const row = GEAR_CATALOGUE.find(c => c.id === catId);
+  if (!row) return null;
+  const mine = own();
+  if (mine.tooNew) return null;                 // never clobber a newer schema
+  if (!mine.present && !adopt(current || kit().items)) return null;
+  return addItem({
+    name: row.name,
+    category: row.category,
+    rental: !!row.rental,
+    qty: row.qty || 1,
+  });
 }
 
 export const renameItem = (id, name) => patch(id, { name });

@@ -90,64 +90,61 @@ a { color: inherit; }
    bigger than the disc it holds so the halo has somewhere to go, and `right` is
    pulled back by the same 6vmin the box grew on that side, so the planet sits
    where it always did. Change one of these and change all three breakpoints.
-   ★ #globe-hit shares every one of them. It is the invisible box that takes the
-   reader's pointers (see below), and it is only correct while it lies exactly
-   over the disc — so the geometry is written ONCE, here and at each breakpoint,
-   for both. Never give one of them a width the other does not have. */
-#globe-wrap, #globe-hit {
+   ★ THERE IS NO SECOND BOX TO KEEP IN STEP ANY MORE. #globe-hit used to share
+   every one of these numbers, because it had to lie exactly over the disc to take
+   the reader's pointers on its behalf. The hero is not interactive any longer —
+   see the note in index.html — so this geometry is written once and has nothing
+   left to drift apart from.
+
+   ★ AND IT IS ANCHORED TO A NUMBER THAT DOES NOT MOVE, WHICH IS THE SPAWN FIX.
+
+   Theodor: "sometimes it spawns in the middle of the screen or in the upper
+   section."
+
+   It did, and `top` was the larger of the two reasons. Under 760px this box was
+   pulled to `top: 40%` — forty per cent of the VIEWPORT HEIGHT, which on a phone
+   is not a constant. Hiding the URL bar takes 412x915 to 412x800, so the disc's
+   centre slid 46 pixels up the screen while the reader did nothing but scroll;
+   show the bar again and it slid back. Two positions, alternating, out of one
+   declaration, and which one you got depended on how the page had been arrived at.
+
+   So the box is centred at every width — `top: 50%` is a percentage of a height
+   the disc is then centred in, so it is immune to that height changing — and the
+   lift the phone layout genuinely wants becomes a `vmin` offset inside the
+   transform. `vmin` in portrait is the WIDTH, and the width does not move when
+   the URL bar does. The second reason was the scroll parallax landing a frame
+   late on a restored scroll position; that is fixed in js/main.js, in the boot
+   order. */
+#globe-wrap {
   position: fixed;
   top: 50%; right: -25vmin;
   width: 100vmin; height: 100vmin;
-  transform: translateY(-50%);
+  /* the per-breakpoint nudge, in vmin so it cannot move under a dynamic viewport */
+  --globe-lift: 0vmin;
+  transform: translateY(calc(-50% + var(--globe-lift)));
 }
 #globe-wrap { z-index: 1; pointer-events: none; will-change: transform, opacity; }
 #globe { width: 100%; height: 100%; display: block; transition: opacity .5s var(--ease); }
 
-/* ★ THE PINS WERE NEVER CLICKABLE, AND IT TOOK TWO FIXES, NOT ONE.
+/* ★ THE HERO'S PLANET IS NOT A CONTROL, AND THE MACHINERY THAT MADE IT ONE IS GONE.
  *
- * js/main.js has carried a `click` and a `pointermove` handler on the globe since
- * session 2, and has always toggled `body.globe-hot` when the disc is the hero's
- * subject — with a comment explaining that it must stay inert below the hero or a
- * fixed layer would swallow clicks meant for §02's entries and §04's cells. All of
- * that was right and none of it ever ran. Two silent failures, stacked:
+ * What stood here was the long account of how #globe-hit came to exist: the disc
+ * had to be PAINTED under #scrim, so the page colour could be poured back over the
+ * type, and HIT above `main` at z-index 3, or every press landed on the hero's
+ * copy — and one element cannot be on both sides of the same layer. So a second,
+ * empty, disc-clipped box sat over the hero taking pointers for it.
  *
- *   1. No rule ever consumed `globe-hot`, so `pointer-events: none` on #globe-wrap
- *      inherited straight through to the canvas.
- *   2. `main` is `position: relative; z-index: 3` — above BOTH the globe and the
- *      scrim — so with pointer events switched on, every one of them still landed
- *      on `#hero`.
+ * Theodor: "remove the interactive thing on the main page where you load in,
+ * because that's just weird."
  *
- * Neither throws, neither logs, and the cursor never even changed.
- *
- * ★ AND THE OBVIOUS FIX FOR (2) IS WRONG. Lifting #globe-wrap over `main` also
- * lifts it over #scrim, and #scrim is the gradient that pours the page colour back
- * across the type. Tried, rendered, looked at: a full-brightness planet directly
- * behind the hero copy on a phone. The disc must be PAINTED under the scrim and
- * HIT above the page, and one element cannot be on both sides of the same layer.
- *
- * So #globe-hit is a second, empty box in exactly the same place — see the note
- * beside it in index.html. Paint order is unchanged; only the hit order moves.
- *
- * ★ `touch-action: pan-y` is what keeps the page. The browser keeps every vertical
- * drag, which matters most on a phone, where the disc lies under the hero copy and
- * a reader flicking upward is scrolling rather than turning the Earth. What is
- * left for js/main.js is the horizontal drag, the two-finger pinch and the tap.
- * Same bargain §03's stage strikes with `data-wheel="modifier"`.
- *
- * ★ CLIPPED TO THE DISC, so the box costs the hero almost nothing. It is a SQUARE
- * around a circular planet, and its corners would otherwise take every click and
- * every text selection in a fifth of the hero for nothing. `clip-path` hit-tests
- * as well as it paints, so those corners hand their events straight back. 50% of a
- * square box is where HALO puts the outer edge of the atmosphere. Zoomed in the
- * sphere fills the box and the clip goes with it — by then the reader is holding
- * the globe on purpose, and RESET VIEW is on screen to let go of it. */
-#globe-hit { z-index: 5; pointer-events: none; }
-body.globe-hot #globe-hit {
-  pointer-events: auto; touch-action: pan-y;
-  clip-path: circle(50% at 50% 50%);
-}
-body.globe-hot.globe-zoomed #globe-hit { clip-path: none; }
-body.globe-hot.globe-turning #globe-hit { cursor: grabbing; }
+ * The whole apparatus went with it — the box, `body.globe-hot`, `globe-zoomed`,
+ * `globe-turning`, the gesture hint and RESET VIEW. None of the reasoning above
+ * was wrong; it was solving a problem the page no longer has. The turning and the
+ * zooming live in §03's ATLAS tab now, where the stage is its own element and
+ * there is no scrim to be on the wrong side of, so the canvas simply takes its own
+ * pointers. verify.mjs §12a asserts none of this comes back. */
+/* day side puts a bright ocean straight behind the body copy — hold it back */
+:root[data-theme='day'] #globe { opacity: .34; }
 /* day side puts a bright ocean straight behind the body copy — hold it back */
 :root[data-theme='day'] #globe { opacity: .34; }
 
@@ -271,54 +268,6 @@ body.no-motion .chapter-menu { transition: none; }
 .pill--go::before { display: none; }
 .pill--go:hover { border-color: var(--accent); color: var(--accent-text); }
 .pill--go svg { width: 12px; height: 12px; flex: none; }
-
-/* ============================================ the globe's own chrome
- * Anchored to the VIEWPORT, not to #globe-wrap — that box is deliberately hung
- * off the right edge so the disc can sit half off-screen, and anything parented
- * to it would go over the edge with it. Sits inside the right rail on a wide
- * page, where the rail's own type is the only other thing at that margin.
- * Only present while the disc is the hero's subject, which is the same condition
- * that makes it interactive at all — see `body.globe-hot` above. */
-#globe-ui {
-  /* ★ 6, ABOVE #globe-hit. At 3 this sat under the hit layer, and zoomed in —
-     where the clip is dropped and the box covers its own bottom-right corner,
-     which is exactly where this is — RESET VIEW was drawn, was hit-testable to
-     puppeteer, and did nothing: every click on it went to the globe underneath
-     and was read as a tap. Caught by the suite, not by looking at it. */
-  position: fixed; z-index: 6;
-  right: calc(var(--rail-w) + 16px); bottom: 16px;
-  display: flex; align-items: center; gap: 12px;
-  opacity: 0; pointer-events: none;
-  transition: opacity .45s var(--ease);
-}
-body.globe-hot #globe-ui { opacity: 1; }
-#globe-hint {
-  font-size: 8.5px; letter-spacing: .2em; color: var(--ink-4);
-  text-transform: uppercase; white-space: nowrap;
-}
-#globe-hint[hidden] { display: none; }
-#globe-reset {
-  display: none;                      /* and therefore out of the tab order */
-  padding: 6px 12px; border-radius: 999px;
-  border: 1px solid var(--hairline); background: var(--chrome); color: var(--ink-2);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  font-size: 8.5px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
-  cursor: pointer; pointer-events: auto;
-  transition: border-color .25s, color .25s;
-}
-/* --ink, not --accent-text: that token is named by .pill--go above and is not
-   defined in tokens.css, so it resolves to nothing and the declaration is dropped.
-   Pre-existing and only a hover colour, but not worth copying into a new rule. */
-#globe-reset:hover { border-color: var(--accent); color: var(--ink); }
-body.globe-zoomed #globe-reset { display: inline-flex; }
-/* while a finger is on the disc the hint is in the way of the thing it describes */
-body.globe-turning #globe-hint { opacity: .25; }
-@media (max-width: 760px) {
-  /* the rails are gone at this width, so the margin comes back to the edge, and
-     the hero's own "— DESCEND THE CATALOGUE" sits low on the left: keep clear */
-  #globe-ui { right: 14px; bottom: 12px; gap: 9px; }
-  #globe-hint { font-size: 8px; letter-spacing: .14em; }
-}
 
 /* the two vertical rails */
 .rail {
@@ -714,6 +663,180 @@ section { position: relative; }
 }
 .figure-legend { display: flex; flex-wrap: wrap; gap: 10px 26px; color: var(--ink-3); margin-top: -22px; margin-bottom: 20px; }
 .figure-legend b { color: var(--ink); font-weight: 700; font-family: var(--font-mono); }
+
+/* ============================================ §03 · THE TWO INSTRUMENTS
+ * ★ A TAB STRIP, NOT A SECOND CHAPTER.
+ *
+ * Theodor, on where the interactive globe should go: "I think in the same section
+ * as the anatomy, but just a different tab in the same area."
+ *
+ * It reuses .circuit-pick's language on purpose — the same rectangular mono
+ * buttons, the same accent fill for the one that is on — because §03 already asks
+ * the reader to choose between things twice (which circuit, and now which view of
+ * it) and inventing a second visual grammar for the second question would read as
+ * two unrelated controls rather than one habit.
+ *
+ * The panes are `hidden`, not merely transparent: the atlas holds a live canvas
+ * and the racing line holds another, and whichever is not on screen must be out of
+ * the layout AND paused — see applyGates() in js/main.js. Half a fix would leave
+ * two full-resolution rasters sharing one frame budget for the life of the page. */
+.fig-tabs {
+  display: flex; gap: 6px;
+  margin: clamp(30px, 5vh, 54px) 0 0;
+}
+.fig-tab {
+  padding: 9px 16px; border: 1px solid var(--hairline); background: transparent;
+  color: var(--ink-3); cursor: pointer;
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase;
+  transition: border-color .25s, color .25s, background .25s;
+}
+.fig-tab:hover { color: var(--ink); border-color: var(--accent-dim); }
+.fig-tab[aria-selected='true'] {
+  color: var(--bg); background: var(--accent); border-color: var(--accent);
+}
+.fig-tab:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+/* the framed figure sits directly under the strip it belongs to. The panel is a
+   plain box around the whole instrument — the frame AND, for the racing line, the
+   legend and the circuit picker below it — so the margin belongs to the .figure
+   inside it rather than to the panel. */
+.fig-tabs + [role='tabpanel'] .figure { margin-top: 0; }
+[role='tabpanel'][hidden] { display: none; }
+
+/* screen-reader-only, for the search field's label */
+.vh {
+  position: absolute; width: 1px; height: 1px; margin: -1px;
+  padding: 0; border: 0; overflow: hidden; white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+/* ================================================================ THE ATLAS
+ * The stage and the list, side by side on a page wide enough to hold both and
+ * stacked below that. The stage is the tall one, so it is the one that gets a
+ * viewport-relative height and the list scrolls beside it rather than the two
+ * fighting over the same column. */
+.atlas {
+  display: grid; grid-template-columns: minmax(0, 1fr) 232px; gap: 0;
+  margin-top: 44px;                          /* clear the figure's caption */
+  /* ★ THE HEIGHT IS DECLARED ONCE, HERE, AND BOTH COLUMNS TAKE IT.
+     A grid row is as tall as its tallest cell, so with the height on the stage
+     alone a list of 23 circuits made the row 1 400px and left a thousand pixels
+     of nothing under the globe. Bound to the same custom property, the list
+     scrolls inside the stage's height instead of setting it. */
+  --atlas-h: clamp(340px, 58vh, 620px);
+}
+.atlas-stage {
+  position: relative;
+  height: var(--atlas-h);
+  /* ★ pan-y, NOT none, and for exactly the reason §03's other stage gives: this
+     is a block in a scrolling page and as tall as a phone, so a stage that owned
+     the gesture outright would be a place the page stops scrolling. Vertical drags
+     go back to the document; the horizontal drag, the pinch and the tap are ours.
+     A plain wheel scrolls the page too — see the handler in js/main.js. */
+  touch-action: pan-y;
+  cursor: grab;
+  outline: none;
+}
+.atlas-stage.is-grabbing { cursor: grabbing; }
+.atlas-stage.is-over-pin { cursor: pointer; }
+.atlas-stage:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.atlas-stage > canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.atlas-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px;
+  pointer-events: none;                      /* the canvas keeps the empty space */
+}
+.atlas-bar > * { pointer-events: auto; }
+.atlas-modes { display: flex; }
+.atlas-modes button {
+  padding: 6px 13px; border: 1px solid var(--hairline); background: var(--chrome);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  color: var(--ink-3); cursor: pointer;
+  font-family: var(--font-mono); font-size: 8.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase;
+  transition: border-color .25s, color .25s, background .25s;
+}
+.atlas-modes button + button { margin-left: -1px; }
+.atlas-modes button:hover { color: var(--ink); border-color: var(--accent-dim); }
+.atlas-modes button[aria-pressed='true'] {
+  color: var(--bg); background: var(--accent); border-color: var(--accent);
+}
+/* ★ IT RETIRES THE MOMENT IT HAS BEEN TAKEN, which is the same bargain the hero's
+   gesture hint used to strike. A canvas cannot advertise itself, so the line has to
+   be there for a reader who has not realised the picture is a control — and once
+   they have turned it, it is a caption over the one thing they came to look at,
+   held at 8.5px over a lit continent where it is barely legible anyway. */
+.atlas-hint {
+  font-size: 8.5px; letter-spacing: .18em; color: var(--ink-4);
+  text-transform: uppercase; white-space: nowrap;
+  transition: opacity .3s var(--ease);
+}
+.atlas.is-moved .atlas-hint { opacity: 0; }
+.atlas-reset {
+  margin-left: auto;
+  padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--hairline); background: var(--chrome); color: var(--ink-2);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  font-size: 8.5px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+  cursor: pointer; opacity: 0; pointer-events: none;
+  transition: border-color .25s, color .25s, opacity .3s var(--ease);
+}
+.atlas-reset:hover { border-color: var(--accent); color: var(--ink); }
+/* only when there is something to reset — same rule the hero's used to follow */
+.atlas.is-moved .atlas-reset { opacity: 1; pointer-events: auto; }
+
+.atlas-side {
+  display: flex; flex-direction: column; min-width: 0;
+  height: var(--atlas-h); min-height: 0;
+  border-left: 1px solid var(--hairline);
+}
+.atlas-search { display: block; padding: 12px 14px; border-bottom: 1px solid var(--hairline-soft); }
+.atlas-search input {
+  width: 100%; padding: 7px 9px;
+  border: 1px solid var(--hairline); background: transparent; color: var(--ink);
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em;
+}
+.atlas-search input:focus { outline: none; border-color: var(--accent); }
+.atlas-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 14px 0; }
+.atlas-filters button {
+  padding: 5px 9px; border: 1px solid var(--hairline); background: transparent;
+  color: var(--ink-4); cursor: pointer;
+  font-size: 8px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+  transition: border-color .2s, color .2s;
+}
+.atlas-filters button[aria-pressed='true'] { color: var(--ink); border-color: var(--accent); }
+.atlas-list { flex: 1 1 auto; overflow-y: auto; padding: 10px 6px 10px 8px; min-height: 0; }
+.atlas-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 7px 8px; border: 0; background: transparent; text-align: left;
+  color: var(--ink-2); cursor: pointer;
+  transition: background .2s, color .2s;
+}
+.atlas-row:hover, .atlas-row:focus-visible { background: var(--hairline-soft); color: var(--ink); outline: none; }
+.atlas-row .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--k, var(--accent)); }
+.atlas-row .nm { flex: 1 1 auto; font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-row .cy { font-family: var(--font-mono); font-size: 8px; letter-spacing: .12em; color: var(--ink-4); text-transform: uppercase; flex: none; }
+.atlas-row[aria-selected='true'] { color: var(--ink); background: var(--hairline-soft); }
+.atlas-empty { padding: 14px 10px; color: var(--ink-4); font-size: 11.5px; }
+.atlas-src {
+  padding: 10px 14px; border-top: 1px solid var(--hairline-soft);
+  font-size: 8px; letter-spacing: .14em; color: var(--ink-4); text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  /* the list under the stage rather than beside it — 232px of sidebar off a
+     phone's width would leave the globe a strip */
+  .atlas { grid-template-columns: minmax(0, 1fr); }
+  /* stacked, so the two are no longer sharing a grid row and the side is free to
+     be as tall as it needs up to its list's own cap — pinning it to --atlas-h
+     here would leave a fixed 340px box with a short list rattling around in it */
+  .atlas-side { height: auto; border-left: 0; border-top: 1px solid var(--hairline); }
+  .atlas-list { max-height: 260px; }
+  .atlas-stage { height: var(--atlas-h, clamp(300px, 52vh, 460px)); }
+  .atlas-hint { display: none; }             /* the bar wraps before it fits */
+}
 
 /* ============================================================= §04 CATALOGUE */
 .cat {
@@ -1334,6 +1457,74 @@ body.no-motion .p3d { transition: none; }
 .kit-del:hover { color: var(--accent); border-color: var(--hairline); }
 .kit-del:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 
+/* ==================================================== THE CATALOGUE SHELF
+ * ★ VISIBLY NOT PART OF THE KIT, which is the whole design brief for it.
+ *
+ * Everything above this block is the reader's own equipment. This is a shelf of
+ * things that are not, offered one press at a time — see GEAR_CATALOGUE in
+ * js/gear.js for why they cannot simply be appended to the list and why the 1.x
+ * inventory's provenance depends on them not being.
+ *
+ * So it is a <details>, indented, quieter, and behind its own summary: collapsed
+ * once the reader owns a list, because by then it is a drawer they open when they
+ * want something; open while the list is still 1.x's, because that is the state
+ * where "you can add to this" is the thing that most needs saying. It empties as
+ * it is used — rows already in the kit are filtered out by name — and the whole
+ * block disappears when there is nothing left to offer. */
+.kit-shelf {
+  margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--hairline);
+}
+.kit-shelf > summary {
+  display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+  list-style: none; color: var(--ink-3);
+  font-size: 9.5px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;
+  transition: color .2s;
+}
+.kit-shelf > summary::-webkit-details-marker { display: none; }
+.kit-shelf > summary::after {
+  content: '+'; margin-left: auto; color: var(--ink-4); font-size: 14px; line-height: 1;
+}
+.kit-shelf[open] > summary::after { content: '–'; }
+.kit-shelf > summary:hover { color: var(--ink); }
+.kit-shelf > summary .n { color: var(--accent); }
+.kit-shelf-note {
+  margin: 12px 0 6px; max-width: 46ch;
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-3);
+}
+.kit-offer {
+  display: grid; align-items: center; gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  padding: 8px 0; border-bottom: 1px solid var(--hairline-soft);
+}
+.kit-offer .nm { font-size: 14px; color: var(--ink-2); min-width: 0; }
+/* ★ NOT `.cat`. §04's catalogue grid already owns that class — `display: grid;
+   grid-template-columns: repeat(auto-fill, minmax(224px, 1fr))` — so a span
+   borrowing the name became a 224px grid container inside every shelf row and
+   made each one 172px tall. Prefixed, like everything else in this block. */
+.kit-offer-cat {
+  font-size: 8px; letter-spacing: .12em; color: var(--ink-4); text-transform: uppercase;
+  white-space: nowrap;
+}
+.kit-offer .tag {
+  padding: 3px 7px; border: 1px solid var(--accent-dim); color: var(--accent);
+  font-size: 8px; letter-spacing: .13em; white-space: nowrap;
+}
+.kit-offer .tag--own { border-color: var(--hairline); color: var(--ink-4); }
+.kit-add-one {
+  width: 32px; height: 32px; cursor: pointer;
+  border: 1px solid var(--hairline); background: none; color: var(--ink-2);
+  font-size: 15px; line-height: 1;
+  transition: color .2s, border-color .2s, background .2s;
+}
+.kit-add-one:hover { border-color: var(--accent); color: var(--accent); }
+.kit-add-one:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  /* the category column is the first thing to go — the tag already says the only
+     part of it the reader is deciding on */
+  .kit-offer { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .kit-offer-cat { display: none; }
+}
+
 /* a read-only row in the not-yet-adopted state: same shape, no controls */
 .p-item.is-static { cursor: default; }
 .p-item.is-static:hover { color: var(--ink-2); }
@@ -1389,7 +1580,7 @@ body.no-motion .entry-open:hover svg { transform: none; }
 @media (max-width: 1080px) {
   .entry, .mandate-grid { grid-template-columns: minmax(0, 1fr); }
   .mandate-h { max-width: none; }
-  #globe-wrap, #globe-hit { width: 100vmin; height: 100vmin; right: -40vmin; }
+  #globe-wrap { width: 100vmin; height: 100vmin; right: -40vmin; }
   /* ★ RAISED — see the note at the ≤460px block below, which is the one Theodor
      was actually looking at. Same reasoning, one step less of it, because the
      scrim here is still the horizontal wipe and already carries the left of the
@@ -1417,7 +1608,18 @@ body.no-motion .entry-open:hover svg { transform: none; }
   /* the toggles collapse to their state dot; the way to the kit does not */
   .pill--go span { display: inline; }
   .hero-mark { display: none; }
-  #globe-wrap, #globe-hit { width: 141vmin; height: 141vmin; right: -60.5vmin; top: 40%; }
+  /* ★ `--globe-lift`, NOT `top: 40%` — see the long note beside #globe-wrap. The
+     intent is unchanged: at this width the hero's copy sits OVER the disc rather
+     than beside it, and the planet is lifted so the lede has darker ground under
+     it. What changed is the unit. 40% of the viewport height was 10% of a number
+     the URL bar rewrites twice a scroll, so the disc had two resting places; this
+     is the same distance expressed in vmin, which in portrait is the width, and
+     the width holds still. −14.1vmin is a tenth of this breakpoint's own 141vmin
+     box, which is exactly what the old 10% of height came to at 412×915. */
+  #globe-wrap {
+    width: 141vmin; height: 141vmin; right: -60.5vmin;
+    --globe-lift: -14.1vmin;
+  }
   /* ★ THE PHONE HELD THE EARTH AT A THIRD, AND THAT IS WHAT "MAKE IT BRIGHTER"
      WAS ABOUT.
        Theodor, on the phone hero: "make the Earth a bit brighter." Nothing in

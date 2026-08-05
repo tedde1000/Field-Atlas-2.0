@@ -41,8 +41,8 @@ assets/earth-topo-4096.jpg          global elevation — the SHAPE of the surfac
 assets/earth-blue-marble-2048.jpg   NASA Blue Marble — the land-cover COLOUR only
 assets/earth-night-2048.png         NASA Earth at Night — the city LIGHTS only
 js/main.js               data -> DOM, the editorial copy, wiring
-js/globe.js              orthographic Earth on a 2D canvas, lit by the real sun,
-                         turned and zoomed by hand at the hero
+js/globe.js              the Earth on a 2D canvas, lit by the real sun — as an
+                         orthographic sphere or as a flat plate, one lighting model
 js/earth.js              bakes the three sources into one relief plate, once, at boot
 js/starfield.js          the field behind everything
 js/circuit.js            §03 — particles round a lap-time-solved racing line, on
@@ -57,6 +57,9 @@ js/panel.js              the detail overlay: routing, focus, history
 js/gear.js               the 1.x inventory, read-only, plus 2.0's own ticks and
                          the kit recovered from 1.x's git history
 data/atlas.js            GENERATED — venues, events, circuits, metrics
+data/atlas-extra.js      HAND-MAINTAINED — the only one. Circuits that are plotted
+                         on §03's atlas but not measured: a name and a coordinate.
+                         Empty on purpose; read its header before adding a row.
 data/world.js            GENERATED — land outlines (Natural Earth 50m, simplified)
 
 assets/fonts.css         GENERATED — Outfit, self-hosted, inlined as data: URIs
@@ -133,12 +136,12 @@ drift into being two different pages.
 
 | # | Section | What it is |
 |---|---------|-----------|
-| 00 | Overture | Title, lede, live countdown to the next date, the globe |
+| 00 | Overture | Title, lede, live countdown to the next date, and the globe — as a **picture**, not a control |
 | 01 | The Dates | Every booking in the season, one row each, in order |
 | 02 | The Season | One entry per date: summary, drawn layout, spec sheet, bars |
-| 03 | Anatomy of a Circuit | A **solved** racing line on a 3D stage you can turn, with the flow paced off its speed profile |
+| 03 | Anatomy & Atlas | Two tabs in one frame: a **solved** racing line on a 3D stage you can turn, and the atlas — every circuit plotted on a globe that is also a map |
 | 04 | The Catalogue | The 16 competition circuits as a reference layer |
-| 05 | The Kit | The whole equipment inventory, owned / rental / basic |
+| 05 | The Kit | The whole equipment inventory, owned / rental / basic, plus a catalogue to add from |
 
 ### The globe is a shaded-relief sphere, lit by the sun that is actually up
 
@@ -224,7 +227,7 @@ Seven things about it are load-bearing:
   well sampled. Where the excess is under half a texel, which is 83% of the disc,
   nothing changes and nothing is paid; above it the same four taps spread to the
   width the pixel is actually responsible for.
-- **It is rastered and scaled** — 340 while the camera's latitude is easing, 200
+- **It is rastered and scaled** — 680 while the camera is being moved, 200
   while the disc is dimmed behind the scrim — and its limb carries a sub-texel
   coverage alpha, drawn *outside* the arc clip, because canvas `clip()` is not
   antialiased in Chrome.
@@ -233,7 +236,10 @@ Seven things about it are load-bearing:
   `r · 2 · dpr` backing pixels across, which is 1 012 on a 412px phone and 1 572 on
   a retina laptop, so the terrain was being blown up 1.45x and 2.25x with a
   full-resolution coastline struck over the top of it. That is Theodor's "it feels
-  a bit blurry", and it is arithmetic rather than taste. `RASTER_MAX` is
+  a bit blurry", and it is arithmetic rather than taste. (It was only half of it —
+  the other half was that the raster covered the whole disc rather than the part on
+  screen, which is what "still a bit blurry" turned out to be. See *Why it is
+  sharper* below.) `RASTER_MAX` is
   `PLATE_W / 2` = **1 024** now — the visible hemisphere carries half the map
   however big the disc is, so past that the raster really would only be magnifying
   the plate's own bilinear filter. It costs 2.1x the pixels of 700, and what makes
@@ -254,62 +260,211 @@ Seven things about it are load-bearing:
   per-entry aim is *placed* rather than flown for the same reason the two chapter
   aims already were: below that threshold there is nothing to animate for.
 
-### The globe is in the reader's hands at the hero
+### The hero's globe is a picture; §03's atlas is the control
 
-Turn it with a drag, zoom it with a pinch or ctrl-scroll, tap a pin to open that
-circuit. Zoom runs 1×–4.2×, which is set by the pins rather than by taste: the
-eight dates sit inside about eight degrees of latitude, 55 px at the hero radius,
-so at 1× they overlap inside one hit radius and *press them* is not a thing anyone
-can do. At 4× that spread is 220 px and every circuit is its own target.
+> "Remove the interactive thing on the main page where you load in, because that's
+> just weird." — and, on where it should go: "in the same section as the anatomy,
+> but just a different tab in the same area."
 
-**The pressing half was written in session 2 and had never once run.** Two silent
-failures were stacked on it, and neither throws, logs, or does anything but
-nothing:
+For two sessions the hero's disc was draggable, pinchable and pressable, through
+`#globe-hit` — an empty box sharing its geometry at `z-index: 5`, which existed
+because the disc has to be **painted under** `#scrim` and **hit above** `main`, and
+one element cannot be on both sides of the same layer. Every one of the constraints
+that made that hard came from it being a *backdrop*: it needed a line of type to
+advertise itself, it could not zoom past 4.2× because eight pins had to stay
+separable behind body copy, and on a phone it sat directly under the lede.
 
-- `body.globe-hot` was toggled on and off correctly, and **no stylesheet rule ever
-  consumed it**, so `pointer-events: none` on `#globe-wrap` inherited straight
-  through to the canvas.
-- `main` is `position: relative; z-index: 3` — above both the globe *and* the
-  scrim — so once pointer events were switched on, every one of them still landed
-  on `#hero`.
+So the hero keeps the planet and gives up the control. `#globe-hit`, `#globe-ui`,
+`body.globe-hot`, `globe-zoomed`, `globe-turning` and the `fa2.globeHint` key are
+all gone. §12a asserts they stay gone; §14b asserts the *behaviour*, which is that a
+drag and a ctrl-scroll do nothing to the hero and a click in the middle of the disc
+reaches the page.
 
-And the obvious fix for the second is wrong. Lifting `#globe-wrap` over `main`
-also lifts it over `#scrim`, which is the gradient that pours the page colour back
-across the type: tried, rendered, looked at, and it put a full-brightness planet
-directly behind the hero copy on a phone. The disc must be **painted under** the
-scrim and **hit above** the page, and one element cannot be on both sides of the
-same layer. Hence `#globe-hit` — an empty box sharing `#globe-wrap`'s geometry in
-one rule, at `z-index: 5`, clipped with `clip-path: circle(50%)` so the square's
-empty corners hand their events back to the hero instead of eating a fifth of it.
+**§03 is a tab strip now.** `RACING LINE` is the default — every existing assertion
+about that chapter queries `#fig-3d`, which is only in the layout while its tab is
+open — and `THE ATLAS` is the second. The tab is part of the paint gate rather than
+just a class: `applyGates()` runs exactly one of the two canvases, and neither when
+the chapter is off screen. The atlas is built lazily, on first open, because
+`createGlobe()` allocates a surface canvas, an ImageData and the whole geometry
+cache, and doing that at boot would put it in competition with the hero's globe,
+the starfield and the relief bake for a stage three screens down.
 
-Four more things are load-bearing:
+On the stage the constraints are gone, so:
 
-- **`touch-action: pan-y`, not `none`.** The browser keeps every vertical drag, so
-  a finger anywhere on the disc still scrolls the page — which matters most on a
-  phone, where the disc lies under the hero copy. Same bargain §03's stage strikes
-  with `data-wheel="modifier"`, and the wheel here is held behind ctrl/⌘ for the
-  same reason.
-- **Pointers turn and tap; touch events pinch.** Not a style choice. While
-  `touch-action` still permits the browser a gesture, Chrome hands the page only
-  the *first* touch point as a pointer — measured, a real two-finger spread
-  produced exactly one `pointerdown`. The legacy Touch Events API has no such
-  problem, and `ev.touches` carries both.
-- **Zoom walks the camera toward the pointer.** `#globe-wrap` hangs off the right
-  edge of the viewport, so a zoom purely about the disc centre drives whatever the
-  reader is looking at off screen exactly as they lean in. The point under the
-  fingers is unprojected to a real lat/lon and the camera moves `1 − z₀/z₁` of the
-  way to it — nothing for a nudge, asymptotically all of it as the zoom builds.
-- **A drag counts as *moving* for the raster.** The existing test reads
-  `tLat − lat`, which is the gap an *ease* has left to close, and a drag closes it
-  itself every frame — so a hand-turned globe looked stationary, took the full
-  raster, and rebuilt the whole geometry cache inside every frame of the drag.
-  `setGesture()` is what the surface pass actually watches now.
+- **it runs to `ATLAS_ZOOM_MAX` = 40×**, not 4.2 — the old ceiling was set by the
+  pins needing to be separable, and here nothing is behind them;
+- **the pins carry names**, deconflicted greedily in priority order (a booked date
+  outranks a competition circuit outranks a reference pin), so when two collide the
+  one that loses is always the less important — at every zoom, rather than whichever
+  was later in the array;
+- **there is one element, not two.** Nothing is over this canvas, so it takes its own
+  pointers and the whole `#globe-hit` problem simply does not arise.
 
-The city lights also **dim as the reader leans in** (`zoom^-0.75`). The glow is
-baked at a fixed radius in *texels*, so magnifying the plate magnifies every light
-with it: at 4× the night side was forty-pixel clouds of haze over the one ground
-the reader had zoomed in to look at. Their apparent area goes as zoom², so holding
-total light constant would want `1/zoom²` and would extinguish them.
+The list beside it is not a second §04. §04 is the reference layer read as prose;
+this is the same circuits read as positions, and its only jobs are to find one by
+name and fly the camera to it. Both open the identical panel from the identical
+route. The filters set the pin set as well as the list, so the two cannot disagree.
+
+Four things carried over from the hero unchanged, because the reasoning was
+expensive to find and has not changed:
+
+- **`touch-action: pan-y`, not `none`.** The stage is as tall as a phone and sits in
+  the middle of a scrolling page; owning every vertical drag would make it a place
+  the page stops.
+- **Pointers turn and tap; touch events pinch.** While `touch-action` still permits
+  the browser a gesture, Chrome hands the page only the *first* touch point as a
+  pointer — measured, a real two-finger spread produced exactly one `pointerdown`.
+  `ev.touches` carries both.
+- **A plain wheel scrolls the page**; ctrl/⌘-wheel zooms, which is also what a
+  trackpad pinch sends.
+- **Zoom walks the camera toward the pointer**, so what you lean in on arrives in
+  the middle rather than leaving the screen.
+
+★ **And one new trap, which cost a silent feature.** `setPointerCapture` on the
+stage retargets every later event — *including the click* — to the capturing
+element. GLOBE, MAP and RESET VIEW live inside the stage, so they were drawn,
+hit-testable, and did nothing at all: pressing MAP turned the planet a pixel. A
+press that begins on `.atlas-bar` is now the chrome's and the globe never hears
+about it. This is the mirror image of the bug that made the hero's own RESET VIEW
+inert two sessions ago, and just as quiet.
+
+### The globe is also a map, and it is not a second renderer
+
+> "For the globe itself, make that also a map."
+
+The obvious build is a second module. It is a trap: the sun, the terminator, the
+twilight ramp and the city lights are ~200 lines of tuned code in `buildLut()` and
+the sample loop, and a copy of them drifts from the original the day after it is
+written. So `mode` splits `js/globe.js` in exactly three places —
+
+| | globe | map |
+|---|---|---|
+| `project()` / `unproject()` | orthographic | linear in lon/lat |
+| `buildGeo()` | walks the disc | walks the visible rect |
+| `paint()` chrome | halo, limb, arc clip | frame, no halo |
+
+— and **everything between them is shared byte for byte**. `buildGeoMap()` fills the
+same flat arrays in the same units, including the surface normal in the same
+camera-space basis `setSun()` rotates the sun into, so the per-pixel loop never
+learns the projection changed. The map is lit by the same sun at the same instant
+*by construction* rather than by agreement, and §14d asserts it: the subsolar point
+either side of the toggle is not merely close, it is the same number.
+
+Three things are load-bearing about the flat plate:
+
+- **The ±180° seam is a real edge.** A ring crossing it has two consecutive points a
+  whole world apart in x; joined naively, Eurasia grows a bar across the map. Rings
+  are unwrapped relative to the camera and the run breaks at any step over half a
+  world — the same class of bug, and the same shape of answer, as the land mask in
+  `js/earth.js`.
+- **The fresnel is switched off in the LUT, not per pixel.** It is a function of the
+  surface turning away from the reader, which on a sphere is the limb and on a plate
+  is nothing; left on, it painted a blue haze down the two meridians 90° from the
+  camera, in open map.
+- **Switching preserves the ground, not the number.** `zoom` means divisions of the
+  world on one side and a radius multiplier on the other, so what is carried across
+  is the visible longitude span — and on the map, raised far enough that
+  `mapLatClamp()` still holds the current latitude in the middle. Preserving the
+  span and preserving the place conflict at Swedish latitudes, and the place wins:
+  pressing MAP over Sweden that gave you the Mediterranean would be a bug.
+
+### Why it is sharper, and what happens when the plate runs out
+
+> "It's still a bit blurry… especially not when you move it around."
+
+**The blur was arithmetic, and it was in one line.** `buildSurface()` rastered the
+*entire disc* into a buffer capped at `RASTER_MAX` and `paint()` blitted it to
+`(cx−r, cy−r, 2r, 2r)`. At 1× that is right — 1 024 is the plate's own texel count
+across a hemisphere. At 4× the disc is 3 200 CSS pixels across, three quarters of it
+is off screen, and the same 1 024 buffer is stretched over all of it. So the raster
+covers the **intersection of the disc with the canvas** now (`viewWindow()`), which
+is the same rectangle at zoom 1 — the hero is the same numbers through the same
+code — and four times the linear resolution at 4×, for nothing. The window is
+rounded *outward*, never to nearest, because it is both what the geometry is built
+for and what the result is blitted to, and rounding inward would leave a hairline of
+unpainted canvas at the edge.
+
+Three consequences worth writing down:
+
+- **The moving raster doubled**, because the buffer it caps is no longer the whole
+  planet. The self-timing `RASTER_LADDER` still arbitrates, so a machine that cannot
+  hold it walks down and stays down.
+- **The geometry cache's latitude quantum is a screen pixel, not a tenth of a
+  degree.** A tenth of a degree of *ground* is three quarters of a pixel at the hero
+  and thirty at the atlas's 40× — so the old key would have left the shaded relief
+  lying thirty pixels from the coastline struck over it. It tightens by itself now.
+- **A zoom counts as moving.** The window is a function of the zoom, so an easing
+  pinch invalidates the cache every frame exactly as an easing latitude does; left
+  out, the first second of every pinch rebuilt a full-resolution cache per frame.
+
+★ **Past the plate's own detail, it stops being a photograph.** 2 048 texels of
+longitude is 5.7 to the degree and no zoom invents a sixth. Fading toward luminance
+was tried first and does not work — desaturating a blurred photograph gives a
+blurred grey photograph. What magnified imagery lacks is not colour, it is that
+every edge in it is four texels wide, so the picture has to be *replaced*: past ~3×
+magnification the sample cross-fades to a flat land or sea tone (decided by its own
+blue dominance, the same property the city-light extraction turns on) plus a quarter
+of the relief's own tonal variation. The coastline and the graticule, struck at full
+resolution, then carry it — and the graticule densifies 20° → 5° → 1° → 0.2° with
+the zoom, which the fixed 20° rings never did. The deep view reads **sharper** than
+the shallow one, which is the correct outcome and the opposite of magnifying.
+
+### The load-in, and where the planet lands
+
+> "Sometimes it spawns in the middle of the screen or in the upper section… make the
+> spawning or the load-in of the globe consistent and higher quality."
+
+Three causes, all fixed, none of them the same bug:
+
+- **`top: 40%` under 760px** is forty per cent of a viewport height a phone's URL bar
+  rewrites twice a scroll: 412×915 and 412×800 put the disc's centre 46px apart. It
+  is `top: 50%` at every width now — a percentage of a height the disc is then
+  centred in, so it is immune to that height changing — and the lift the phone
+  layout genuinely wants is `--globe-lift`, in `vmin`, which in portrait is the
+  width and does not move. `js/scroll.js` carries it through the parallax transform.
+- **The parallax landed a frame late on a restored scroll.** One synchronous
+  `scroll.refresh()` under the same rAF that lights the page resolves the disc to
+  the position the scroll position implies before anything is shown.
+- **The plate was still decoding.** `loadPlate()` bakes three images, so the first
+  frames painted a plain unlit sphere which the real Earth then replaced in one
+  frame — two arrivals, the first of them wrong. The disc is composited through
+  `warm` now: nothing until the plate is ready, then a 420ms fade, with a 900ms
+  fallback so a failed bake still gives the reader a planet. §14a′ asserts no frame
+  is ever shown at strength without a surface behind it.
+
+★ **And a latent NaN, found by the atlas and fixed for both.** A `requestAnimationFrame`
+callback is handed the time the *frame* began, which can be earlier than the
+`performance.now()` read when a globe was constructed — the hero never showed it
+because it is built before the first frame exists, but §03's atlas is built from a
+click handler and its first `dt` was reliably −18ms. A negative `dt` is harmless in
+the eases; in the `MAX_TURN` clamp it makes `cap` negative, so a camera that is not
+moving at all fails `mag > cap` and is scaled by `cap / 0` — −Infinity times −0 is
+NaN, and both angles were NaN from the second frame on. No surface, no pins, no sun,
+one frame after construction, silently. `dt` is floored at zero and the clamp takes
+`mag > 0`; either fix alone leaves the other reachable.
+
+### The night side
+
+> "The lighting on the dark sides of the Earth can look weird."
+
+Two causes, and both were in `buildLut()`:
+
+- **The city lights were burning on the day side.** `dusk` ran to `L = 0.30`, which
+  is ~17° of arc *past* the terminator and well into daylight, so every lit city was
+  also glowing on ground the sun was standing over. The top of the ramp is inside
+  the twilight band now.
+- **The unlit hemisphere was one flat number.** `ambient` was a constant, so an unlit
+  *ocean* — which has no hillshade of its own to give it away — came out as a dead
+  slab with a hard edge at the limb, and the sphere stopped being a sphere on the
+  half of it that was dark. `L` already runs −1 at the antisolar point to 0 at the
+  terminator, so a gentle ramp along it costs nothing and gives the dark half its
+  roundness back.
+
+And the lamp compensation is keyed to **magnification** rather than to `zoom`. The
+glow is baked at a fixed radius in texels, so magnifying the plate magnifies every
+light with it — `zoom` was only ever a proxy for that, a good one while the raster
+covered the whole disc. Once it covers the window, and once `zoom` means two
+different things in two projections, the honest term is texels per screen pixel.
 
 ### §03 solves for lap time, not for geometry
 
@@ -428,6 +583,15 @@ else, `KIT_1X` stands in: the 29-item inventory recovered from Field-Atlas commi
 "real kit + rental options + suggested basics", which is why the badges matter.
 **A live inventory always wins, and the page always says which one it is showing.**
 2.0 still never writes `evhub.*`.
+
+**New equipment goes in `GEAR_CATALOGUE`, never in `KIT_1X`.** That array's whole
+value is that §05 can print "your equipment" and be telling the truth; appending a
+tripod nobody owns to it turns that sentence into a guess, silently, on every
+device. So the eighteen additions live in a separate list the kit panel offers one
+press at a time — `catalogueLeft()` filters out anything already in the kit by name,
+`addFromCatalogue()` moves one across, adopting the list on screen first if it has
+to. Nothing is ever added automatically. What is on it, and what was deliberately
+left off it, is written down over the array.
 
 1.x's hard rule is kept: never seed or suggest flash or strobe.
 

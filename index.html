@@ -37,7 +37,7 @@
 <link rel="stylesheet" href="assets/fonts.css?v=95d09e90">
 
 <link rel="stylesheet" href="assets/tokens.css?v=202054ef">
-<link rel="stylesheet" href="assets/app.css?v=2a5b4e3b">
+<link rel="stylesheet" href="assets/app.css?v=0302f3fe">
 </head>
 <body>
 
@@ -47,17 +47,24 @@
 <div id="sky" aria-hidden="true"><canvas id="stars"></canvas></div>
 <div id="globe-wrap" aria-hidden="true"><canvas id="globe"></canvas></div>
 <div id="scrim" aria-hidden="true"></div>
-<!-- ★ THE GLOBE IS TOUCHED HERE, NOT ON THE CANVAS, and the two cannot be the
-     same element. The disc has to be PAINTED under #scrim — that gradient is what
-     pours the page colour back over the type so the hero stays readable — and it
-     has to be HIT ABOVE `main`, which is `z-index: 3`, or every press lands on
-     §00's copy instead. One element cannot be on both sides of the same layer, and
-     trying it put a full-brightness planet behind the hero on a phone.
-     So this is the same box, empty and invisible, sitting above the page: it takes
-     the pointers and hands them to js/main.js, which turns and zooms the canvas
-     below. Its geometry is shared with #globe-wrap in one rule in app.css, so the
-     two cannot drift apart across the three breakpoints. -->
-<div id="globe-hit" aria-hidden="true"></div>
+<!-- ★ THERE IS NO #globe-hit ANY MORE, AND THAT IS THE POINT.
+     Theodor: "remove the interactive thing on the main page where you load in,
+     because that's just weird."
+     For two sessions this was an empty box lying over the hero at z-index 5,
+     clipped to the disc, taking the reader's pointers and handing them to
+     js/main.js to turn and zoom the planet behind the type. It worked, and it was
+     the wrong place for it: a reader arriving at a page does not expect the
+     background to be a control, and on a phone it sat directly under the lede.
+     The turning, the pinching and the pin taps all moved to §03's ATLAS tab —
+     a stage the reader opens on purpose, with the room to do it in. What is left
+     here is a planet, drifting, lit by the real sun, and nothing to press.
+     Its geometry now lives in ONE rule in app.css with no second box to keep in
+     step, and verify.mjs §12a asserts this element stays gone. -->
+
+<!-- ★ AND NO #globe-ui EITHER. The hint that named the gesture and the RESET VIEW
+     that undid it were chrome for an interaction that no longer exists here; both
+     moved to the atlas stage, which carries its own. The `fa2.globeHint` key they
+     wrote is dead and is not read anywhere. -->
 
 <!-- ★ THE EARTH, IN THREE EQUIRECTANGULAR SOURCES. js/earth.js reads all three
      back with getImageData at boot and bakes them into ONE 2048x1024 plate that
@@ -129,26 +136,6 @@
     <button class="pill" id="pill-theme" type="button" aria-pressed="true"><span>NIGHT SIDE</span></button>
   </div>
 </header>
-
-<!-- ★ THE GLOBE'S OWN CHROME, and the hint is not decoration.
-     A canvas cannot advertise itself: nobody pinches what looks like a background
-     image, so without a line of type saying so the turning and the zooming would
-     exist and never be found. It names whichever gesture this device can actually
-     do — js/main.js fills it from `(pointer: coarse)` — and it retires for good
-     the first time the reader zooms, because after that it is only clutter.
-     RESET VIEW shows up only when there is something to reset. Both live outside
-     #globe-wrap: that box is hung off the right edge of the viewport so the disc
-     can sit half off-screen, and anything anchored inside it would go with it.
-
-     ★ The HINT is aria-hidden and the BUTTON is not. The hint describes a gesture
-     that only exists for a pointer, so reading it out to someone who has no
-     pointer is noise; the button is a real control and is display:none until
-     there is a zoom to undo, which keeps it out of the tab order until it means
-     something without any aria bookkeeping to get wrong. -->
-<div id="globe-ui">
-  <span class="mono" id="globe-hint" aria-hidden="true"></span>
-  <button class="mono" id="globe-reset" type="button">RESET VIEW</button>
-</div>
 
 <div class="rail rail--l" aria-hidden="true"><span id="rail-left">TEDDEPICS · NORDIC CIRCUIT · SEASON 2026</span></div>
 <div class="rail rail--r" aria-hidden="true"><span id="rail-right">UTC —</span></div>
@@ -222,18 +209,51 @@
     </div>
   </section>
 
-  <!-- ============================================ 03 · ANATOMY ============= -->
-  <section id="anatomy" data-chapter="03" data-title="ANATOMY OF A CIRCUIT">
+  <!-- ============================================ 03 · ANATOMY & ATLAS ===== -->
+  <!-- ★ THE CHAPTER HOLDS TWO INSTRUMENTS NOW, ON A TAB.
+       Theodor, asked where the interactive globe should live: "I think in the same
+       section as the anatomy, but just a different tab in the same area."
+       So §03 is no longer only the racing line. It is the two ways this page looks
+       at a circuit — the lap from the inside, and where on Earth the lap is — and
+       they share one framed figure, one caption and one stage box, because they are
+       the same question at two scales. The title carries both; `data-title` is what
+       the chapter readout and the jump menu print, so it is the one that had to
+       change and there is no second copy of it anywhere. -->
+  <section id="anatomy" data-chapter="03" data-title="ANATOMY &amp; ATLAS">
     <div class="wrap">
       <div class="chapter-head" data-reveal>
         <div class="row">
-          <div class="mono"><span class="n">03</span><span class="t">ANATOMY OF A CIRCUIT</span></div>
-          <div class="mono sub">RACING LINE · LIVE INTEGRATION</div>
+          <div class="mono"><span class="n">03</span><span class="t">ANATOMY &amp; ATLAS</span></div>
+          <div class="mono sub" id="anatomy-sub">RACING LINE · LIVE INTEGRATION</div>
         </div>
         <hr>
       </div>
 
       <div data-reveal>
+        <!-- ★ RACING LINE IS THE DEFAULT, AND THAT IS LOAD-BEARING. Everything the
+             suite asserts about this chapter — the posts, the numerals, the solved
+             line, that the stage does not trap the page scroll — queries #fig-3d,
+             which only exists on screen while this tab is the open one. Change the
+             default and §12b, §12c and §13c all start measuring a hidden subtree.
+             The reader's own choice is remembered under `fa2.figTab`; a first
+             visit always lands here. -->
+        <div class="fig-tabs mono" role="tablist" aria-label="What to show">
+          <button class="fig-tab" type="button" role="tab" id="tab-line"
+                  data-figtab="line" aria-selected="true" aria-controls="pane-line">
+            RACING LINE
+          </button>
+          <button class="fig-tab" type="button" role="tab" id="tab-atlas"
+                  data-figtab="atlas" aria-selected="false" aria-controls="pane-atlas" tabindex="-1">
+            THE ATLAS
+          </button>
+        </div>
+
+        <!-- ★ THE PANE IS THE WHOLE INSTRUMENT, NOT JUST ITS FRAME. #fig-legend
+             and .circuit-pick belong to the racing line and stood OUTSIDE the
+             panel the first time this was written — so they went on showing with
+             the atlas open, and the tab strip drew straight over the top of them.
+             A tabpanel has to hold everything that belongs to its tab. -->
+        <div id="pane-line" role="tabpanel" aria-labelledby="tab-line">
         <div class="figure rise">
           <span class="bracket tl"></span><span class="bracket tr"></span>
           <span class="bracket bl"></span><span class="bracket br"></span>
@@ -266,6 +286,58 @@
         </div>
         <div class="figure-legend mono rise" style="--d:.1s" id="fig-legend"></div>
         <div class="circuit-pick rise" style="--d:.14s" id="circuit-pick"></div>
+        </div><!-- /#pane-line -->
+
+        <!-- ★ THE ATLAS — the globe the hero used to be, given a box of its own.
+             Same js/globe.js, same baked plate, same real sun; what differs is that
+             this one is the SUBJECT rather than a backdrop, so it may be turned,
+             pinched to forty times, switched to a flat map, and pressed. The list
+             beside it is not a duplicate of §04: §04 is the reference layer read as
+             prose, this is the same circuits read as positions, and pressing either
+             opens the identical panel. -->
+        <div id="pane-atlas" role="tabpanel" aria-labelledby="tab-atlas" hidden>
+        <div class="figure rise">
+          <span class="bracket tl"></span><span class="bracket tr"></span>
+          <span class="bracket bl"></span><span class="bracket br"></span>
+          <div class="cap">
+            <span class="mono l" id="atlas-label">FIG. 3.2 — THE ATLAS</span>
+            <span class="mono r" id="atlas-meta"></span>
+          </div>
+
+          <div class="atlas" id="atlas">
+            <!-- ★ ONE ELEMENT TAKES THE POINTERS AND THE CANVAS PAINTS, exactly as
+                 at the old hero — but here they can be the SAME box, because there
+                 is no scrim to be on the wrong side of. That was the whole reason
+                 #globe-hit had to exist and the whole reason it does not any more. -->
+            <div class="atlas-stage" id="atlas-stage" tabindex="0" role="group"
+                 aria-label="The atlas. Drag to turn, pinch or ctrl-scroll to zoom, press a circuit to open it.">
+              <canvas id="atlas-globe"></canvas>
+              <div class="atlas-bar">
+                <div class="atlas-modes mono" role="group" aria-label="Projection">
+                  <button type="button" data-atlas="globe" aria-pressed="true">GLOBE</button>
+                  <button type="button" data-atlas="map" aria-pressed="false">MAP</button>
+                </div>
+                <span class="atlas-hint mono" id="atlas-hint"></span>
+                <button class="atlas-reset mono" type="button" data-atlas="reset">RESET VIEW</button>
+              </div>
+            </div>
+
+            <div class="atlas-side">
+              <label class="atlas-search">
+                <span class="vh">Search circuits</span>
+                <input type="search" id="atlas-search" autocomplete="off"
+                       placeholder="Search circuits…">
+              </label>
+              <!-- built by renderAtlasList() in js/main.js, from the same rows the
+                   globe is pinned with, so the two can never disagree -->
+              <div class="atlas-filters mono" id="atlas-filters" role="group"
+                   aria-label="Filter by discipline"></div>
+              <div class="atlas-list" id="atlas-list" role="listbox" aria-label="Circuits"></div>
+              <div class="atlas-src mono" id="atlas-src"></div>
+            </div>
+          </div>
+        </div>
+        </div><!-- /#pane-atlas -->
       </div>
     </div>
   </section>
@@ -333,6 +405,6 @@
   </div>
 </div>
 
-<script type="module" src="js/main.js?v=d0c64e77"></script>
+<script type="module" src="js/main.js?v=6af1958e"></script>
 </body>
 </html>

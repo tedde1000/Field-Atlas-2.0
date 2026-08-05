@@ -148,8 +148,15 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
     if (state.motion) {
       const gs = 1 - hp * 0.46;
       const gx = hp * 12, gy = hp * 16;
+      /* ★ `var(--globe-lift)` IS NOT DECORATION HERE — it is the phone's whole
+         resting position, and writing a transform without it would put the disc
+         back where `top: 40%` used to leave it. app.css sets that custom property
+         per breakpoint precisely so this one expression can carry it at every
+         width without knowing which width it is at. See the note beside
+         #globe-wrap for why the lift is a vmin rather than a percentage. */
       globeWrap.style.transform =
-        `translate3d(${gx}vmin, calc(-50% + ${gy}vmin), 0) scale(${gs.toFixed(3)})`;
+        `translate3d(${gx}vmin, calc(-50% + var(--globe-lift) + ${gy}vmin), 0) ` +
+        `scale(${gs.toFixed(3)})`;
     }
     globeWrap.style.opacity = String(go);
     // tell the globe how visible it actually is, so it can stop spending a
@@ -233,7 +240,7 @@ export function initScroll({ hero, globeWrap, progress, chapterLabel, onChapter,
       if (!on) {
         hero.style.transform = hero.style.filter = '';
         hero.style.opacity = '';
-        globeWrap.style.transform = 'translate3d(0, -50%, 0)';
+        globeWrap.style.transform = 'translate3d(0, calc(-50% + var(--globe-lift)), 0)';
       }
       read();
     },

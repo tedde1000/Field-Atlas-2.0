@@ -956,7 +956,7 @@ const decim = await p.evaluate(async () => {
   return m ? m[1].trim() : null;
 });
 ok(decim !== null, 'globe.js still declares its land decimation', String(decim));
-ok(/r > 1[0-9]{2} \? 1/.test(decim || ''),
+ok(/r(Eff)? > 1[0-9]{2} \? 1/.test(decim || ''),
   '★ land rings are drawn point-for-point at any readable disc size',
   `base = ${decim}`);
 
@@ -1121,6 +1121,18 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     '★ the drifting reticle is gone from the document');
   ok(await page.evaluate(() => !document.querySelector('.colophon')),
     'the colophon block is gone from the footer');
+  /* ★ "Remove the interactive thing on the main page where you load in, because
+     that's just weird." The hero's disc is a picture again: the invisible hit box
+     that took its pointers, the gesture hint and RESET VIEW are all gone, and the
+     turning and zooming live in §03's ATLAS tab. §14b asserts the BEHAVIOUR — that
+     a drag and a ctrl-scroll do nothing to it — which is the thing that actually
+     has to hold; these three are the "it stays gone" half, and they are cheap. */
+  ok(await page.evaluate(() => !document.getElementById('globe-hit')),
+    '★ the hero\'s invisible globe hit-layer is gone from the document');
+  ok(await page.evaluate(() => !document.getElementById('globe-ui')),
+    'and the gesture hint and RESET VIEW with it');
+  ok(await page.evaluate(() => !document.body.className.includes('globe-hot')),
+    'and nothing still marks the hero\'s disc as live');
   ok(await page.evaluate(() => !document.querySelector('#foot-sig') === false),
     'the footer signature is still there');
 
@@ -1476,7 +1488,12 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
      past it the raster can only magnify the plate's own bilinear filter. 700 was
      an upscale everywhere it mattered: 1.45x on a phone hero, 2.25x on a retina
      laptop, which is what "it feels a bit blurry" was. See RASTER_MAX. */
-  ok(Number(g0.raster) > 0 && Number(g0.raster) <= 1024,
+  /* ★ TWO NUMBERS NOW, `WxH`. The raster covers the INTERSECTION of the disc with
+     the canvas rather than the whole disc — see viewWindow() in js/globe.js, which
+     is where most of the remaining blur was — so it is the window's shape, and at
+     zoom 1 with the disc inside the box that is the square it always was. */
+  const rasterWH = String(g0.raster || '').split('x').map(Number);
+  ok(rasterWH.length === 2 && rasterWH.every(v => v > 0 && v <= 1024),
     'the surface raster stays inside its cap', `raster=${g0.raster}`);
   /* ★ AND IT IS NOT AN UPSCALE ANY MORE. The cap alone does not say that: a
      ceiling of 1 024 with a raster still stuck at 700 would pass it and look
@@ -1490,7 +1507,8 @@ console.log('\n12 · session 5 (racing line, corner numbers, satellite globe)');
     const wrap = document.getElementById('globe-wrap').getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const r = (Math.min(wrap.width, wrap.height) / 2 - 2) / 1.14;
-    return { disc: Math.round(r * 2 * dpr), raster: Number(c.dataset.raster) };
+    return { disc: Math.round(r * 2 * dpr),
+             raster: Math.max(...String(c.dataset.raster || '0').split('x').map(Number)) };
   });
   ok(upscale.raster >= Math.min(1024, upscale.disc) - 2,
     '★ and it is not magnified — the raster reaches the disc, or the plate\'s limit',
@@ -2033,228 +2051,394 @@ console.log('\n14 · session 8 — getting out of the scroll, and saying what a 
   await q.close();
 }
 
-/* -- 14c · ★ THE GLOBE IS IN THE READER'S HANDS ----------------------------
+/* ===========================================================================
+ * §14 — the hero lets go of the Earth, and §03 picks it up
  *
- *   "if I have my thumb on the globe I could zoom in on it, just to get closer to
- *    Sweden and where all the tracks are, and then press them."
+ * Four things Theodor reported, and the whole of this section is them:
  *
- * The pressing half was written in session 2 and had NEVER RUN. `body.globe-hot`
- * was toggled and the handlers were bound, but no rule consumed the class, so
- * `pointer-events: none` inherited from #globe-wrap; and once that was fixed the
- * events still went to `#hero`, because `main` is `z-index: 3` and the globe was
- * 1. Two independent silent failures stacked on the same feature, neither of
- * which throws, logs, or shows up as anything but "clicking does nothing".
+ *   "sometimes it spawns in the middle of the screen or in the upper section"
+ *                                                              -> 14a
+ *   "remove the interactive thing on the main page where you load in"
+ *                                                              -> 14b
+ *   "make a new part of the website where there's an interactive globe"
+ *   "for the globe itself, make that also a map"                -> 14c, 14d
+ *   "it's still a bit blurry… especially not when you move it around"
+ *                                                              -> 14e
  *
- * So the first check here is not about zooming at all — it is that a point on the
- * disc HIT-TESTS TO THE CANVAS. That is the invariant both bugs broke, it is one
- * `elementFromPoint` call, and it would have caught either of them on its own.
- * (A third nearly shipped behind them: an unterminated comment in app.css ate the
- * z-index rule silently. A behavioural check catches that class of thing too — a
- * source-level grep for the selector would have passed.) */
-{
-  const q = await open('', 1440, 900);
-  const geom = await q.evaluate(() => {
-    const hit = document.getElementById('globe-hit'), b = hit.getBoundingClientRect();
-    const wrap = document.getElementById('globe-wrap').getBoundingClientRect();
-    const at = (dx, dy) => {
-      const el = document.elementFromPoint(b.x + b.width / 2 + dx, b.y + b.height / 2 + dy);
-      return el?.id || el?.tagName;
-    };
-    return {
-      hot: document.body.classList.contains('globe-hot'),
-      centre: at(0, 0), inner: at(-60, -120),
-      corner: at(-b.width / 2 + 12, -b.height / 2 + 12),   // outside the clip circle
-      hitZ: +getComputedStyle(hit).zIndex,
-      wrapZ: +getComputedStyle(document.getElementById('globe-wrap')).zIndex,
-      scrimZ: +getComputedStyle(document.getElementById('scrim')).zIndex,
-      mainZ: +getComputedStyle(document.querySelector('main')).zIndex,
-      pe: getComputedStyle(hit).pointerEvents,
-      touch: getComputedStyle(hit).touchAction,
-      aligned: Math.abs(b.x - wrap.x) < 0.5 && Math.abs(b.y - wrap.y) < 0.5 &&
-               Math.abs(b.width - wrap.width) < 0.5 && Math.abs(b.height - wrap.height) < 0.5,
-    };
-  });
-  ok(geom.hot && geom.centre === 'globe-hit' && geom.inner === 'globe-hit',
-    '★ a point on the disc actually reaches the globe — pins are pressable at all',
-    `centre=${geom.centre} inner=${geom.inner} pe=${geom.pe}`);
-  ok(geom.hitZ > geom.mainZ,
-    'because the hit layer is above the page while the disc is the subject',
-    `hit ${geom.hitZ} vs main ${geom.mainZ}`);
-  /* ★ THE OTHER HALF, and the whole reason the hit layer exists. Lifting the
-     CANVAS over `main` also lifts it over #scrim, and #scrim is the gradient that
-     pours the page colour back across the type — tried, rendered, and it put a
-     full-brightness planet directly behind the hero copy on a phone. The disc is
-     hit above the page and must still be PAINTED under it. */
-  ok(geom.wrapZ < geom.scrimZ && geom.scrimZ < geom.mainZ,
-    '★ while the disc itself is still painted under the scrim and the page',
-    `globe ${geom.wrapZ} < scrim ${geom.scrimZ} < main ${geom.mainZ}`);
-  ok(geom.aligned,
-    'and the hit layer lies exactly over the disc it stands in for');
-  /* the hit layer is a square around a circular planet: its corners must hand
-     their events back, or an invisible box takes a fifth of the hero's copy */
-  ok(geom.corner !== 'globe-hit',
-    '★ but its empty corners hand the hero back its clicks', `corner=${geom.corner}`);
-  ok(geom.touch === 'pan-y',
-    'and a finger dragged down the disc still scrolls the page', `touch-action=${geom.touch}`);
+ * What was here before was §14c, the check that the hero's disc hit-tested to
+ * #globe-hit. That element is gone on purpose and 12a now asserts it stays gone;
+ * the gesture checks it used to run live below, against the stage that inherited
+ * them.
+ * ======================================================================== */
 
-  /* --- ctrl-wheel zooms, and a plain wheel does not --- */
-  const c0 = await q.evaluate(() => {
-    const b = document.getElementById('globe').getBoundingClientRect();
-    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
-  });
-  await q.mouse.move(c0.cx, c0.cy);
-  const scroll0 = await q.evaluate(() => window.scrollY);
-  for (let i = 0; i < 4; i++) { await q.mouse.wheel({ deltaY: 200 }); await sleep(60); }
-  await sleep(600);
-  const plain = await q.evaluate(() => ({
-    y: window.scrollY, zoom: +document.getElementById('globe').dataset.zoom }));
-  ok(plain.y > scroll0 + 100 && plain.zoom < 1.02,
-    '★ a plain wheel over the globe scrolls the page, it does not zoom it',
-    `scrollY ${scroll0}->${plain.y}, zoom ${plain.zoom}`);
-  await q.close();
-}
+/* -- 14a · ★ THE PLANET LANDS IN THE SAME PLACE EVERY TIME -----------------
+ *
+ * "Sometimes it spawns in the middle of the screen or in the upper section."
+ *
+ * Two causes, and this asserts against both. The first was `top: 40%` under
+ * 760px — forty per cent of a viewport height that a phone's URL bar rewrites
+ * twice a scroll, so 412x915 and 412x800 put the disc's centre 46px apart. The
+ * second was the scroll parallax arriving a frame late on a RESTORED scroll
+ * position, so the disc appeared at full size and then jumped to 0.54.
+ *
+ * Measured as the disc centre's FRACTION of the viewport, because that is the
+ * thing that must not move: the same fraction at two heights is the URL bar
+ * half, and matching a fresh load against a reloaded one is the parallax half. */
 {
-  const q = await open('', 1440, 900);
-  const c0 = await q.evaluate(() => {
-    const b = document.getElementById('globe').getBoundingClientRect();
-    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
-  });
-  await q.mouse.move(c0.cx + 40, c0.cy - 150);
-  await q.keyboard.down('Control');
-  for (let i = 0; i < 10; i++) { await q.mouse.wheel({ deltaY: -120 }); await sleep(70); }
-  await q.keyboard.up('Control');
-  await sleep(2000);
-  const zoomed = await q.evaluate(() => {
-    const c = document.getElementById('globe');
-    return { zoom: +c.dataset.zoom, lat: +c.dataset.lat, raster: +c.dataset.raster,
-             ms: +c.dataset.surfMs,
-             cls: document.body.classList.contains('globe-zoomed'),
-             reset: getComputedStyle(document.getElementById('globe-reset')).display };
-  });
-  ok(zoomed.zoom > 2, '★ ctrl-scroll on the disc zooms in', `zoom=${zoomed.zoom}`);
-  /* ★ It has to zoom TOWARD THE POINTER, not about the disc centre — #globe-wrap
-     hangs off the right edge of the viewport, so a centred zoom drives whatever
-     the reader is looking at off the screen exactly as they lean in. Aimed above
-     the centre, the camera must have climbed north. */
-  ok(zoomed.lat > 52,
-    '★ and toward what is under the pointer — the camera walked north to meet it',
-    `camera latitude ${zoomed.lat}° (from 46°)`);
-  ok(zoomed.ms < 16,
-    'and the surface pass still holds its frame budget zoomed in', `${zoomed.ms} ms`);
-  ok(zoomed.cls && zoomed.reset !== 'none',
-    'RESET VIEW appears once there is something to reset', `display=${zoomed.reset}`);
-
-  await q.click('#globe-reset');
-  await sleep(1800);
-  const back = await q.evaluate(() => ({
-    zoom: +document.getElementById('globe').dataset.zoom,
-    reset: getComputedStyle(document.getElementById('globe-reset')).display }));
-  ok(back.zoom < 1.02 && back.reset === 'none',
-    'and puts the whole planet back', `zoom=${back.zoom}`);
-  await q.close();
-}
-
-/* --- a tap opens a pin; a drag through the same pin must not --------------
- * The projection here is the SUITE'S OWN, written out from the orthographic
- * formulae rather than read back off the page, so this cannot pass by agreeing
- * with a broken globe about where a circuit is. */
-{
-  const RADt = Math.PI / 180;
-  const project = (v, cam) => {
-    const p = v.lat * RADt, l = v.lon * RADt, cl = Math.cos(p);
-    const a = cl * Math.sin(l), b = cl * Math.cos(l), c = Math.sin(p);
-    const sLon = Math.sin(cam.lon * RADt), cLon = Math.cos(cam.lon * RADt);
-    const sLat = Math.sin(cam.lat * RADt), cLat = Math.cos(cam.lat * RADt);
-    const P = b * cLon + a * sLon;
-    if (sLat * c + cLat * P < 0) return null;
-    return { x: cam.cx + cam.r * (a * cLon - b * sLon),
-             y: cam.cy - cam.r * (cLat * c - sLat * P) };
+  const frac = async (w, h) => {
+    const q = await open('', w, h);
+    await sleep(1600);
+    const v = await q.evaluate(() => {
+      const r = document.getElementById('globe-wrap').getBoundingClientRect();
+      return (r.top + r.height / 2) / window.innerHeight;
+    });
+    await q.close();
+    return v;
   };
-  const camOf = (page) => page.evaluate(() => {
-    const c = document.getElementById('globe'), b = c.getBoundingClientRect();
-    return { lon: +c.dataset.lon, lat: +c.dataset.lat,
-             cx: b.x + b.width / 2, cy: b.y + b.height / 2,
-             r: (Math.min(b.width, b.height) / 2 - 2) / 1.14 * (+c.dataset.zoom) };
-  });
-  const venue = VENUES.find(v => v.events && v.events.length);
+  const tall = await frac(412, 915);       // URL bar showing
+  const short = await frac(412, 800);      // URL bar hidden
+  ok(Math.abs(tall - short) < 0.02,
+    '★ the globe lands at the same place whether the URL bar is up or down',
+    `915px=${tall.toFixed(3)} 800px=${short.toFixed(3)}`);
 
-  const q = await open('', 1440, 900);
-  let p = project(venue, await camOf(q));
-  await q.mouse.move(p.x, p.y);
-  await q.mouse.down(); await sleep(60); await q.mouse.up();
-  await sleep(900);
-  const tapped = await q.evaluate(() => ({
-    open: !document.getElementById('panel').hidden, hash: location.hash }));
-  ok(tapped.open && tapped.hash.startsWith('#date/'),
-    `★ tapping ${venue.id}'s pin opens its date`, `hash=${tapped.hash}`);
-  await q.keyboard.press('Escape');
-  await sleep(500);
-  await q.close();
-
-  const w = await open('', 1440, 900);
-  p = project(venue, await camOf(w));
-  const lon0 = await w.evaluate(() => +document.getElementById('globe').dataset.lon);
-  await w.mouse.move(p.x - 70, p.y);
-  await w.mouse.down();
-  for (let i = 1; i <= 8; i++) { await w.mouse.move(p.x - 70 + i * 9, p.y); await sleep(25); }
-  await w.mouse.up();
-  await sleep(900);
-  const dragged = await w.evaluate(() => ({
-    open: !document.getElementById('panel').hidden,
-    lon: +document.getElementById('globe').dataset.lon }));
-  /* ★ Both halves matter. A drag that opened the panel would make the globe
-     unturnable; a "drag" that turned nothing would mean the tap threshold had
-     swallowed the gesture. The pin is deliberately in the path of the drag. */
-  ok(!dragged.open, '★ and dragging THROUGH that same pin does not', `panel open=${dragged.open}`);
-  ok(Math.abs(dragged.lon - lon0) > 5,
-    'because it turned the planet instead', `lon ${lon0}° -> ${dragged.lon}°`);
-  await w.close();
+  const wide = await frac(1440, 900);
+  ok(Math.abs(wide - 0.5) < 0.02,
+    'and it is centred on a wide page, as it always was', `centre=${wide.toFixed(3)}`);
 }
 
-/* --- a pinch, and what happens when the reader leaves ---------------------- */
+/* -- 14a′ · ★ AND IT ARRIVES ONCE, WITH A REAL SURFACE ON IT ---------------
+ * The other half of "make the load-in consistent and higher quality". The relief
+ * plate is baked at boot out of three images that are still decoding when the
+ * first frame goes out, so the disc used to paint as a plain unlit sphere and
+ * then be replaced by the real Earth in a single frame — two arrivals, the first
+ * of them wrong. It is composited through `warm` now: nothing until the plate is
+ * ready, then a fade. See WARM_MS in js/globe.js. */
 {
-  const q = await open('', 390, 844);
-  await q.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, hasTouch: true });
-  await sleep(1200);
-  const cdp = await q.createCDPSession();
-  const b0 = await q.evaluate(() => {
-    const b = document.getElementById('globe').getBoundingClientRect();
-    return { cx: Math.round(b.x + b.width / 2), cy: Math.round(b.y + b.height / 2) };
-  });
-  const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', {
-    type, touchPoints: pts.map((p, i) => ({ x: p[0], y: p[1], id: i })) });
-  let a = [b0.cx - 40, b0.cy - 26], b = [b0.cx + 40, b0.cy + 26];
-  await touch('touchStart', [a, b]);
-  for (let i = 0; i < 14; i++) {
-    a = [a[0] - 7, a[1] - 5]; b = [b[0] + 7, b[1] + 5];
-    await touch('touchMove', [a, b]); await sleep(35);
+  const q = await open('', 1440, 900);
+  /* sampled fast and repeatedly, because what is being asserted is that no frame
+     was ever drawn at full strength without a plate behind it */
+  let bad = null, sawFade = false;
+  for (let i = 0; i < 40; i++) {
+    const s = await q.evaluate(() => {
+      const c = document.getElementById('globe');
+      return { warm: Number(c.dataset.warm), plate: c.dataset.plate };
+    });
+    if (Number.isFinite(s.warm)) {
+      if (s.warm > 0 && s.warm < 1) sawFade = true;
+      if (s.plate === 'loading' && s.warm > 0.02) bad = s;
+    }
+    await sleep(40);
   }
-  await touch('touchEnd', []);
-  await sleep(2000);
-  const pinched = await q.evaluate(() => ({
-    zoom: +document.getElementById('globe').dataset.zoom,
-    hint: document.getElementById('globe-hint').hidden }));
-  ok(pinched.zoom > 1.8, '★ two fingers on the disc pinch it open', `zoom=${pinched.zoom}`);
-  /* the hint is the only advertisement a canvas gets; once the gesture has been
-     used it is clutter, and it must not come back on the next visit either */
-  ok(pinched.hint, 'and the gesture hint retires once it has been taken', `hidden=${pinched.hint}`);
-
-  /* ★ Leaving the hero has to put it back. Below DRIFT_DIM the disc is a backdrop
-     and the pointer is off it, so a zoom left standing is one the reader can
-     neither see the point of nor undo — just a fragment of sphere behind §04. */
-  await q.evaluate(() => window.scrollTo(0, 3000));
-  await sleep(2400);
-  const left = await q.evaluate(() => ({
-    zoom: +document.getElementById('globe').dataset.zoom,
-    pe: getComputedStyle(document.getElementById('globe-hit')).pointerEvents }));
-  ok(left.zoom < 1.05, '★ and scrolling away puts the planet back', `zoom=${left.zoom}`);
-  ok(left.pe === 'none',
-    '★ and the disc goes inert below the hero, so §02 and §04 keep their clicks',
-    `pointer-events=${left.pe}`);
-  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
-    'none of the globe gestures raise a page error', q.__errs.join(' | '));
+  ok(!bad, '★ no frame is shown at strength before the Earth has baked',
+    bad ? `warm=${bad.warm} plate=${bad.plate}` : 'none');
+  const done = await q.evaluate(() => Number(document.getElementById('globe').dataset.warm));
+  ok(done === 1, 'and the arrival finishes rather than sticking half-drawn', `warm=${done}`);
+  ok(sawFade || done === 1, 'the fade ran or was already over', `sawFade=${sawFade}`);
   await q.close();
 }
+
+/* -- 14b · ★ THE HERO'S PLANET IS NOT A CONTROL ANY MORE -------------------
+ *
+ * "Remove the interactive thing on the main page where you load in, because
+ *  that's just weird."
+ *
+ * Asserted behaviourally rather than by grepping for the removed ids — §12a does
+ * that — because what actually has to be true is that pressing and dragging the
+ * hero's disc DOES NOTHING to it, however the removal was carried out. A point
+ * on the disc must also hand its clicks back to the hero, which is the exact
+ * inverse of what the old §14c asserted about the same coordinates. */
+{
+  const q = await open('', 1440, 900);
+  await sleep(1600);
+  const before = await q.evaluate(() => {
+    const c = document.getElementById('globe');
+    const r = document.getElementById('globe-wrap').getBoundingClientRect();
+    return { zoom: +c.dataset.zoom, lat: +c.dataset.lat,
+             cx: r.x + r.width / 2, cy: r.y + r.height / 2,
+             el: (document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) || {}).id };
+  });
+  await q.mouse.move(before.cx, before.cy);
+  await q.mouse.down();
+  for (let i = 1; i <= 12; i++) await q.mouse.move(before.cx - i * 12, before.cy + i * 4);
+  await q.mouse.up();
+  await q.keyboard.down('Control');
+  for (let i = 0; i < 6; i++) await q.mouse.wheel({ deltaY: -120 });
+  await q.keyboard.up('Control');
+  await sleep(900);
+  const after = await q.evaluate(() => {
+    const c = document.getElementById('globe');
+    return { zoom: +c.dataset.zoom, lat: +c.dataset.lat };
+  });
+  ok(after.zoom < 1.02, '★ a drag and a ctrl-scroll on the hero do not zoom it',
+    `zoom ${before.zoom} -> ${after.zoom}`);
+  /* the idle drift moves longitude on purpose, so LATITUDE is the axis a drag
+     would have changed and the drift never does */
+  ok(Math.abs(after.lat - before.lat) < 1.5,
+    'and they do not turn it either', `lat ${before.lat} -> ${after.lat}`);
+  ok(before.el !== 'globe' && before.el !== 'globe-hit',
+    '★ and the middle of the disc hands its clicks to the page',
+    `elementFromPoint=${before.el}`);
+  await q.close();
+}
+
+/* -- 14c · ★ §03 HAS TWO TABS AND ONLY ONE CANVAS RUNS ---------------------
+ * The atlas and the racing line share a chapter, a frame and a stage box. Both
+ * hold a live canvas, so the tab is part of the paint gate rather than only a
+ * class on a div — half a fix would leave two full-resolution surface passes
+ * sharing one frame budget for the life of the page. */
+{
+  const q = await open('#anatomy', 1440, 900);
+  await sleep(2200);
+  const t0 = await q.evaluate(() => ({
+    line: !document.getElementById('pane-line').hidden,
+    atlas: !document.getElementById('pane-atlas').hidden,
+    built: !!document.getElementById('atlas-globe').dataset.paints,
+    title: document.getElementById('anatomy').dataset.title,
+  }));
+  ok(t0.line && !t0.atlas, '★ §03 opens on the racing line, as the suite assumes',
+    JSON.stringify(t0));
+  ok(/ATLAS/.test(t0.title), 'and the chapter is titled for both instruments', t0.title);
+
+  await q.click('#tab-atlas');
+  await sleep(2200);
+  const figA = await q.evaluate(() => document.getElementById('flow').dataset.paints);
+  const atlA = await q.evaluate(() => document.getElementById('atlas-globe').dataset.paints);
+  await sleep(1200);
+  const figB = await q.evaluate(() => document.getElementById('flow').dataset.paints);
+  const atlB = await q.evaluate(() => document.getElementById('atlas-globe').dataset.paints);
+  ok(Number(atlB) > Number(atlA), '★ the atlas paints once it is the open tab',
+    `${atlA} -> ${atlB}`);
+  ok(Number(figB) === Number(figA),
+    '★ and the racing line stands still while it is hidden', `${figA} -> ${figB}`);
+
+  const pins = await q.evaluate(() => Number(document.getElementById('atlas-globe').dataset.pins));
+  ok(pins >= 23, 'every circuit on the page is pinned on it', `pins=${pins}`);
+
+  /* ★ AND THE MOTION PILL REACHES IT. This is a third canvas, built lazily and
+     therefore after applyMotion() has already run once — so it is exactly the kind
+     of thing that goes on drifting after the pill says everything has stopped.
+     §4b exists because that pill lying is a bug that shipped once already. */
+  await q.click('#pill-motion');
+  await sleep(900);
+  const m0 = await q.evaluate(() => document.getElementById('atlas-globe').dataset.paints);
+  await sleep(1400);
+  const m1 = await q.evaluate(() => document.getElementById('atlas-globe').dataset.paints);
+  ok(Number(m1) - Number(m0) <= 2,
+    '★ and MOTION off stops the atlas too, not just the hero', `${m0} -> ${m1}`);
+  await q.click('#pill-motion');
+  await sleep(600);
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'and building it raises no page error', q.__errs.join(' | '));
+  await q.close();
+}
+
+/* -- 14d · ★ ONE SUN LIGHTS BOTH PROJECTIONS ------------------------------
+ *
+ * "For the globe itself, make that also a map."
+ *
+ * The temptation was a second renderer, and this is the check that says it was
+ * not built. The terminator, the twilight ramp and the city lights are two
+ * hundred lines of tuned code; a copy of them drifts from the original the day
+ * after it is written. `mode` splits js/globe.js at the projection and nowhere
+ * else, so the subsolar point either side of the toggle is not merely close, it
+ * is the SAME NUMBER — there is only one piece of code that computes it. */
+{
+  const q = await open('#anatomy', 1440, 900);
+  await sleep(2000);
+  await q.click('#tab-atlas');
+  await sleep(2000);
+  const g = await q.evaluate(() => ({ ...document.getElementById('atlas-globe').dataset }));
+  await q.evaluate(() => document.querySelector('[data-atlas="map"]').click());
+  await sleep(1800);
+  const m = await q.evaluate(() => ({ ...document.getElementById('atlas-globe').dataset }));
+
+  ok(g.mode === 'globe' && m.mode === 'map', '★ the MAP button changes the projection',
+    `${g.mode} -> ${m.mode}`);
+  /* the sun creeps 0.004°/s, so a couple of seconds of test is a hundredth of a
+     degree — a tenth is generous and still four hundred times finer than the
+     difference a second implementation would show */
+  ok(Math.abs(+g.sunLat - +m.sunLat) < 0.1 && Math.abs(+g.sunLon - +m.sunLon) < 0.1,
+    '★ and the map is lit by the same sun, at the same instant',
+    `globe ${g.sunLat}/${g.sunLon} · map ${m.sunLat}/${m.sunLon}`);
+  ok(m.sunLock === 'world', 'still fixed in world space on the flat plate', m.sunLock);
+  ok(Number.isFinite(+m.lat) && Number.isFinite(+m.lon),
+    '★ and the camera survives the swap', `lat=${m.lat} lon=${m.lon}`);
+
+  /* the ground is carried across rather than reset — the reader was looking at
+     Sweden and must still be. `lat` is the axis that would betray it, because the
+     map has to hold the camera back from the pole. */
+  ok(Math.abs(+m.lat - +g.lat) < 12,
+    'and the same ground is under the reader after it',
+    `globe lat=${g.lat} map lat=${m.lat}`);
+
+  // the map drags, and it drags the right way
+  const box = await q.evaluate(() => {
+    const r = document.getElementById('atlas-stage').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await q.mouse.move(box.x, box.y);
+  await q.mouse.down();
+  for (let i = 1; i <= 10; i++) await q.mouse.move(box.x - i * 14, box.y);
+  await q.mouse.up();
+  await sleep(700);
+  const dragged = await q.evaluate(() => +document.getElementById('atlas-globe').dataset.lon);
+  ok(dragged > +m.lon, '★ dragging the plate west moves the camera east',
+    `${m.lon} -> ${dragged}`);
+
+  await q.evaluate(() => document.querySelector('[data-atlas="globe"]').click());
+  await sleep(1200);
+  const back = await q.evaluate(() => document.getElementById('atlas-globe').dataset.mode);
+  ok(back === 'globe', 'and the toggle goes back', back);
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'neither projection raises a page error', q.__errs.join(' | '));
+  await q.close();
+}
+
+/* -- 14e · ★ THE ATLAS IS IN HAND, AND IT IS SHARP WHILE IT IS -------------
+ *
+ * "It's still a bit blurry… especially not when you move it around."
+ *
+ * The cause was arithmetic: buildSurface() rastered the WHOLE DISC into a buffer
+ * capped at 1 024 and paint() stretched it across the disc's full width, so at 4x
+ * three quarters of that buffer was off screen and every visible pixel was a 4x
+ * magnification of a quarter of it. The raster covers the window now — see
+ * viewWindow() — so the assertion is a RATIO: what is on screen must be rastered
+ * at close to the device resolution it is shown at, at zoom, not just at rest.
+ *
+ * And the pressing half, which is the whole reason the stage exists: zoom in,
+ * press a circuit, get that circuit. */
+{
+  const q = await open('#anatomy', 1440, 900);
+  await sleep(2000);
+  await q.click('#tab-atlas');
+  await sleep(2200);
+
+  const box = await q.evaluate(() => {
+    const r = document.getElementById('atlas-stage').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height };
+  });
+  await q.mouse.move(box.x, box.y);
+  await q.keyboard.down('Control');
+  for (let i = 0; i < 10; i++) await q.mouse.wheel({ deltaY: -120 });
+  await q.keyboard.up('Control');
+  await sleep(2500);
+
+  const z = await q.evaluate(() => ({ ...document.getElementById('atlas-globe').dataset }));
+  ok(+z.zoom > 3, '★ the atlas zooms far past the hero\'s old 4.2x ceiling', `zoom=${z.zoom}`);
+
+  const [rw, rh] = String(z.raster).split('x').map(Number);
+  const dpr = 1;                                  // open() pins deviceScaleFactor
+  ok(rw >= Math.min(1024, box.w * dpr) * 0.75 && rh >= Math.min(1024, box.h * dpr) * 0.75,
+    '★ and what is on screen is rastered at the resolution it is shown at',
+    `raster=${z.raster} stage=${Math.round(box.w)}x${Math.round(box.h)}`);
+
+  ok(Number(z.labels) > 0, 'the pins carry their names once they have separated',
+    `labels=${z.labels}`);
+  ok(Number(z.grid) < 20, 'and the survey grid tightened with the zoom', `step=${z.grid}°`);
+
+  /* RESET VIEW is only offered when there is something to undo, and it undoes it */
+  const shown = await q.evaluate(() => {
+    const b = document.querySelector('.atlas-reset');
+    return { op: +getComputedStyle(b).opacity, pe: getComputedStyle(b).pointerEvents };
+  });
+  ok(shown.op > 0.5 && shown.pe !== 'none', 'RESET VIEW appears once there is a view to reset',
+    JSON.stringify(shown));
+  await q.evaluate(() => document.querySelector('[data-atlas="reset"]').click());
+  await sleep(1500);
+  const rz = await q.evaluate(() => +document.getElementById('atlas-globe').dataset.zoom);
+  ok(rz < 1.05, 'and it puts the whole planet back', `zoom=${rz}`);
+  await q.close();
+}
+
+/* -- 14e′ · ★ AND YOU CAN PRESS WHAT YOU FIND ------------------------------
+ * The list flies the camera to a circuit; the pin under the reader's finger opens
+ * it. Driven through the list rather than by guessing at a pin's pixel, because
+ * where a pin lands is the thing under test everywhere else and should not also
+ * be the thing this depends on. */
+{
+  const q = await open('#anatomy', 1440, 900);
+  await sleep(2000);
+  await q.click('#tab-atlas');
+  await sleep(2200);
+
+  const rows = await q.evaluate(() => document.querySelectorAll('#atlas-list [data-row]').length);
+  ok(rows >= 23, 'the list holds every circuit the globe is pinned with', `rows=${rows}`);
+
+  await q.evaluate(() => {
+    const r = [...document.querySelectorAll('#atlas-list [data-row]')]
+      .find(x => x.dataset.row === 'gellerasen');
+    r.click();
+  });
+  await sleep(2600);
+  const aimed = await q.evaluate(() => ({ ...document.getElementById('atlas-globe').dataset }));
+  ok(+aimed.zoom > 2, '★ pressing a row flies the camera in to it', `zoom=${aimed.zoom}`);
+  ok(Math.abs(+aimed.lat - 59.32) < 6 && Math.abs(+aimed.lon - 14.5) < 8,
+    'and lands on the circuit it names', `lat=${aimed.lat} lon=${aimed.lon}`);
+
+  /* now the pin is separated, so a tap on it is a real target */
+  const at = await q.evaluate(() => {
+    const c = document.getElementById('atlas-globe');
+    const r = c.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await q.mouse.click(at.x, at.y);
+  await sleep(1200);
+  const open1 = await q.evaluate(() => ({
+    hash: location.hash,
+    title: document.getElementById('panel-title')?.textContent.trim() || null,
+  }));
+  ok(/gellerasen/.test(open1.hash), '★ and pressing the pin opens that circuit',
+    JSON.stringify(open1));
+
+  ok(q.__errs.filter(e => !/favicon|fonts\.g/i.test(e)).length === 0,
+    'none of the atlas gestures raise a page error', q.__errs.join(' | '));
+  await q.close();
+}
+
+/* -- 14f · ★ THE KIT GAINED A SHELF AND evhub.* IS STILL UNTOUCHED ---------
+ *
+ * "Ask me questions about any more equipment I want to add in, if it's gonna be a
+ *  rental thing or if I already own it."
+ *
+ * New equipment could not go into KIT_1X: that array is the inventory Field Atlas
+ * 1.x is KNOWN to have carried, and its whole value is that §05 can print "your
+ * equipment" and be telling the truth. So it is a separate catalogue the panel
+ * offers one press at a time — and the standing rule survives it, which is the
+ * half this asserts. §9g already says 2.0 never writes evhub.*; this says the same
+ * about the one new code path that creates inventory rows. */
+{
+  const q = await open('#gear', 1440, 900, [
+    ['evhub.gear.inventory', JSON.stringify({ __v: 1, data: [
+      { id: 'x1', name: 'Sony A7 III', category: 'Bodies', status: 'owned', defaultQty: 1 },
+    ] })],
+  ]);
+  await sleep(1600);
+  const before = await q.evaluate(() => localStorage.getItem('evhub.gear.inventory'));
+  const offer = await q.evaluate(() => {
+    const b = document.querySelector('[data-kit="offer"]');
+    return b ? b.dataset.offer : null;
+  });
+  ok(offer, '★ the kit panel offers equipment that is not in the list yet', String(offer));
+
+  await q.evaluate(() => document.querySelector('[data-kit="offer"]').click());
+  await sleep(700);
+  const after = await q.evaluate(() => ({
+    evhub: localStorage.getItem('evhub.gear.inventory'),
+    mine: JSON.parse(localStorage.getItem('fa2.gear.inventory') || 'null'),
+  }));
+  ok(after.evhub === before,
+    '★ and adding one leaves Field Atlas 1.x byte-identical', 'evhub unchanged');
+  ok(after.mine && after.mine.items.some(i => i.name && i.name.length),
+    'while 2.0\'s own inventory gained the item', `${after.mine?.items?.length} items`);
+
+  /* it comes off the shelf once it is on the list, so it cannot be added twice */
+  const stillOffered = await q.evaluate((id) =>
+    !!document.querySelector(`[data-offer="${id}"]`), offer);
+  ok(!stillOffered, 'and it leaves the shelf rather than being offered again',
+    `offer=${offer}`);
+  await q.close();
+}
+
 
 await browser.close();
 console.log(`\n${pass} passed, ${fail} failed\n`);

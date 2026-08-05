@@ -61,6 +61,22 @@ bad += (await shoot('02-entry-1', { hash: '#ev-rasbo-0' })).length;
 bad += (await shoot('02-entry-gell', { hash: '#ev-gellerasen-0' })).length;
 bad += (await shoot('02-entry-malmen', { hash: '#ev-malmen-0' })).length;
 bad += (await shoot('03-anatomy', { hash: '#anatomy', wait: 4200 })).length;
+/* ★ §03's second tab, and it needs its own frames rather than one. The atlas is
+   built lazily on first open (see the note over the tab strip in js/main.js), so
+   the wait after the click is a real one, not padding — and the two projections
+   are the whole point of the section, so both are captured. */
+bad += (await shoot('03-atlas-globe', {
+  hash: '#anatomy', wait: 3000,
+  then: async (p) => { await p.click('#tab-atlas'); await sleep(3000); },
+})).length;
+bad += (await shoot('03-atlas-map', {
+  hash: '#anatomy', wait: 3000,
+  then: async (p) => {
+    await p.click('#tab-atlas'); await sleep(2600);
+    await p.evaluate(() => document.querySelector('[data-atlas="map"]').click());
+    await sleep(2200);
+  },
+})).length;
 bad += (await shoot('04-catalogue', { hash: '#catalogue' })).length;
 bad += (await shoot('05-day', {
   then: async (p) => { await p.click('#pill-theme'); await sleep(900); },
